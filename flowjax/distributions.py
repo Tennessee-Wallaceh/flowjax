@@ -117,20 +117,18 @@ class Distribution(eqx.Module, ABC):
 
 
 class Transformed(Distribution):
+    """
+    Form a distribution object defined by a base distribution and a bijection.
+    For Z ~ base and bijection T this distribution is of the random variable X = T(Z). 
+    The forward bijection maps samples from the base to the final (used for sampling).
+    The inverse bijection maps X onto the base distribution (used for density evaluation).
+    """
     base_dist: Distribution
     bijection: Bijection
     dim: int
     cond_dim: int
-
-    def __init__(
-        self,
-        base_dist: Distribution,
-        bijection: Bijection,
-    ):
-        """Form a distribution like object using a base distribution and a
-        bijection. We take the forward bijection for use in sampling, and the inverse
-        bijection for use in density evaluation.
-
+    def __init__( self, base_dist: Distribution, bijection: Bijection):
+        """
         Args:
             base_dist (Distribution): Base distribution.
             bijection (Bijection): Bijection defined in "normalising" direction.
@@ -170,6 +168,9 @@ class StandardNormal(Distribution):
     def _sample(self, key: KeyArray, condition: Optional[Array] = None):
         return random.normal(key, (self.dim,))
 
+    def __repr__(self):
+        return f'<FJ N(0, 1)>'
+
 
 class Normal(Distribution):
     """
@@ -196,6 +197,8 @@ class Normal(Distribution):
         std_x = random.normal(key, (self.dim,))
         return self.std * std_x + self.mean
 
+    def __repr__(self):
+        return f'<FJ N({self.mean}, {self.std})>'
 
 class Uniform(Distribution):
     """
@@ -246,6 +249,8 @@ class Gumbel(Distribution):
     def _sample(self, key: KeyArray, condition: Optional[Array] = None):
         return random.gumbel(key, shape=(self.dim,))
 
+    def __repr__(self):
+        return f'<FJ Gumbel(0, 1)>'
 
 class Cauchy(Distribution):
     """
@@ -263,6 +268,8 @@ class Cauchy(Distribution):
     def _sample(self, key: KeyArray, condition: Optional[Array] = None):
         return random.cauchy(key, shape=(self.dim,))
 
+    def __repr__(self):
+        return f'<FJ Cauchy(0, 1)>'
 
 class StudentT(Distribution):
     """
@@ -280,3 +287,6 @@ class StudentT(Distribution):
 
     def _sample(self, key: KeyArray, condition: Optional[Array] = None):
         return random.t(key, df=self.df, shape=(self.dim,))
+
+    def __repr__(self):
+        return f'<FJ StudentT(df={self.df.item():.2f})>'

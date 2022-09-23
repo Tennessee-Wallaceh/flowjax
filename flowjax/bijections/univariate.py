@@ -1,69 +1,40 @@
-from flowjax.bijections.abc import ParameterisedBijection
-import equinox as eqx
+from flowjax.bijections.abc import Transformer
 import jax.numpy as jnp
 from flowjax.bijections.abc import Bijection
-from jax.random import KeyArray
 from flowjax.utils import Array
-import jax
 
 class Univariate(Bijection):
     """
-    A class implementing a Bijection for the univariate case. 
+    A class implementing a Bijection for the 
+    unconditional univariate case.
     """
-    d: int
-    D: int
-    bijection: ParameterisedBijection
-    conditioner: eqx.nn.MLP
+    transformer: Transformer
     cond_dim: int
+    dim: int
+    params: Array
+    def __init__(self, transformer: Transformer, dim: int):
+        self.transformer = transformer
+        self.cond_dim = 0
+        self.dim = dim
 
-    def __init__(
-        self,
-        key: KeyArray,
-        bijection: ParameterisedBijection,
-        cond_dim: int = 0,
-        nn_width: int = 1, # NN params won't matter unless there is a cond dim
-        nn_depth: int = 1,
-    ):
-        self.bijection = bijection
-        self.d = 0 # Input dim is always 1 for univariate case
-        self.D = 1 # Output always 1
-        self.cond_dim = cond_dim
+        # Initialise the transform parameters
+        self.params = jnp.zeros(transformer.num_params(self.dim))
 
-        self.conditioner = eqx.nn.MLP(
-            in_size=1 + cond_dim,
-            out_size=bijection.num_params(self.D),
-            width_size=nn_width,
-            depth=nn_depth,
-            key=key,
+    def transform(self, z: Array, condition=None):
+        transform_args = self.transformer.get_args(self.params)
+        return self.transformer.transform(z,  *transform_args)
+
+    def transform_and_log_abs_det_jacobian(self, z: Array, condition=None):
+        transform_args = self.transformer.get_args(self.params)
+        x, log_abs_det = self.transformer.transform_and_log_abs_det_jacobian(
+            z, *transform_args
         )
+        return x, log_abs_det
 
-    def _get_params(self, condition=None):
-        x_cond = jnp.array([1]) # Constant input
-        if condition is not None:
-            cond = jnp.concatenate((x_cond, condition))
-        else:
-            cond = x_cond
+    def inverse(self, x: Array, condition=None):
+        transform_args = self.transformer.get_args(self.params)
+        return self.bijection.inverse(x, *transform_args)
 
-        return self.conditioner(cond)
-
-    def transform(self, x: Array, condition=None):
-        assert x.ndim == 1, 'Attempting univariate transform on multidimensional input!'
-        bijection_params = self._get_params(condition)
-        bijection_args = self.bijection.get_args(bijection_params)
-        return self.bijection.transform(x, *bijection_args)
-
-    def transform_and_log_abs_det_jacobian(self, x: Array, condition=None):
-        assert x.ndim == 1, 'Attempting univariate transform on multidimensional input!'
-        bijection_params = self._get_params(condition)
-        bijection_args = self.bijection.get_args(bijection_params)
-        y_trans, log_abs_det = self.bijection.transform_and_log_abs_det_jacobian(
-            x, *bijection_args
-        )
-        return y_trans, log_abs_det
-
-    def inverse(self, y: Array, condition=None):
-        condition = jnp.array([]) if condition is None else condition
-        bijection_params = self._get_params(condition)
-        bijection_args = self.bijection.get_args(bijection_params)
-        x_trans = self.bijection.inverse(y, *bijection_args)
-        return x_trans
+    def inverse_and_log_abs_det_jacobian(self, x: Array, condition=None):
+        transform_args = self.transformer.get_args(self.params)
+        return self.transformer.inverse_and_log_abs_det_jacobian(x, *transform_args)
