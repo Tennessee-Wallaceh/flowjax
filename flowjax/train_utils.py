@@ -68,14 +68,14 @@ def train_flow(
         train_args = random_permutation_multiple(subkey, train_args)
 
         epoch_train_loss = 0
-        batches = range(0, train_args[0].shape[0] - batch_size, batch_size)
+        batches = range(0, train_args[0].shape[0], batch_size)
         for i in batches:
             batch = tuple(a[i : i + batch_size] for a in train_args)
             dist, opt_state, loss_i = step(dist, optimizer, opt_state, *batch)
             epoch_train_loss += loss_i.item() / len(batches)
 
         epoch_val_loss = 0
-        batches = range(0, val_args[0].shape[0] - batch_size, batch_size)
+        batches = range(0, val_args[0].shape[0], batch_size)
         for i in batches:
             batch = tuple(a[i : i + batch_size] for a in val_args)
             epoch_val_loss += loss(dist, *batch).item() / len(batches)

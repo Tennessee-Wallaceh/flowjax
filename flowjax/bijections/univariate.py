@@ -10,15 +10,13 @@ class Univariate(Bijection):
     """
     transformer: Transformer
     cond_dim: int
-    dim: int
     params: Array
-    def __init__(self, transformer: Transformer, dim: int):
+    def __init__(self, transformer: Transformer):
         self.transformer = transformer
         self.cond_dim = 0
-        self.dim = dim
 
         # Initialise the transform parameters
-        self.params = jnp.zeros(transformer.num_params(self.dim))
+        self.params = jnp.zeros(transformer.num_params(1))
 
     def transform(self, z: Array, condition=None):
         transform_args = self.transformer.get_args(self.params)
@@ -38,3 +36,32 @@ class Univariate(Bijection):
     def inverse_and_log_abs_det_jacobian(self, x: Array, condition=None):
         transform_args = self.transformer.get_args(self.params)
         return self.transformer.inverse_and_log_abs_det_jacobian(x, *transform_args)
+
+
+class Fixed(Bijection):
+    """
+    A class implementing a Bijection for the 
+    unconditional univariate case.
+    """
+    transformer: Transformer
+    cond_dim: int
+    args: Array
+    def __init__(self, transformer: Transformer, *args):
+        self.transformer = transformer
+        self.cond_dim = 0
+        self.args = args
+
+    def transform(self, z: Array, condition=None):
+        return self.transformer.transform(z,  *self.args)
+
+    def transform_and_log_abs_det_jacobian(self, z: Array, condition=None):
+        x, log_abs_det = self.transformer.transform_and_log_abs_det_jacobian(
+            z, *self.args
+        )
+        return x, log_abs_det
+
+    def inverse(self, x: Array, condition=None):
+        return self.bijection.inverse(x, *self.args)
+
+    def inverse_and_log_abs_det_jacobian(self, x: Array, condition=None):
+        return self.transformer.inverse_and_log_abs_det_jacobian(x, *self.args)
