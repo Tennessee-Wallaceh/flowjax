@@ -7,7 +7,8 @@ import jax
 import jax.numpy as jnp
 from flowjax.bijections.abc import Transformer
 from functools import partial
-
+from jax.scipy.special import erf, erfc, erfinv
+from jax.scipy import stats as jstats
 
 class AffineTransformer(Transformer):
     "Affine transformation compatible with neural network parameterisation."
@@ -145,3 +146,53 @@ class RationalQuadraticSplineTransformer(Transformer):
         num = sk ** 2 * (dk1 * xi ** 2 + 2 * sk * xi * (1 - xi) + dk * (1 - xi) ** 2)
         den = (sk + (dk1 + dk - 2 * sk) * xi * (1 - xi)) ** 2
         return num / den
+
+
+class InverseNormCDF(Transformer):
+    def transform(self, u, loc, scale):
+        return loc + scale * jnp.sqrt(2) * erfinv(2 * u - 1)
+
+    def transform_and_log_abs_det_jacobian(self, u, loc, scale):
+        raise NotImplementedError
+
+    def inverse(self, x, loc, scale):
+        std_x = (x - loc) / scale
+        return 0.5 * (1 + erf(std_x / jnp.sqrt(2))) 
+
+    def inverse_and_log_abs_det_jacobian(self, x, loc, scale):
+        std_x = (x - loc) / scale
+        x = 0.5 * (1 + erf(std_x / jnp.sqrt(2)))
+        return x, jstats.norm.logpdf(std_x) - jnp.log(scale)
+
+    def num_params(self, dim):
+        return dim * 2
+
+    def get_ranks(self, dim):
+        return jnp.tile(jnp.arange(dim), 2)
+
+    def get_args(self, params):
+        loc, log_scale = params.split(2)
+        return loc, jnp.exp(log_scale)
+
+
+class ErfInv(Transformer):
+    def transform(self, u):
+        return erfinv(u)
+
+    def transform_and_log_abs_det_jacobian(self, u):
+        raise NotImplementedError
+
+    def inverse(self, x):
+        return erf(x) 
+
+    def inverse_and_log_abs_det_jacobian(self, x):
+        return erf(x), jnp.log(2 / jnp.sqrt(jnp.pi)) - jnp.square(x) 
+
+    def num_params(self, dim):
+        return 0
+
+    def get_ranks(self, dim):
+        return jnp.tile(jnp.arange(dim), 2)
+
+    def get_args(self, params):
+        return tuple()
