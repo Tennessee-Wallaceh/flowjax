@@ -2,6 +2,7 @@ from flowjax.bijections.abc import Transformer
 import jax.numpy as jnp
 from flowjax.bijections.abc import Bijection
 from flowjax.utils import Array
+from jax import random
 
 class Univariate(Bijection):
     """
@@ -11,12 +12,12 @@ class Univariate(Bijection):
     transformer: Transformer
     cond_dim: int
     params: Array
-    def __init__(self, transformer: Transformer):
+    def __init__(self, transformer: Transformer, key):
         self.transformer = transformer
         self.cond_dim = 0
 
         # Initialise the transform parameters
-        self.params = jnp.zeros(transformer.num_params(1))
+        self.params = random.normal(key, shape=(transformer.num_params(1),))
 
     def transform(self, z: Array, condition=None):
         transform_args = self.transformer.get_args(self.params)
@@ -52,7 +53,7 @@ class Fixed(Bijection):
         self.args = args
 
     def transform(self, z: Array, condition=None):
-        return self.transformer.transform(z,  *self.args)
+        return self.transformer.transform(z, *self.args)
 
     def transform_and_log_abs_det_jacobian(self, z: Array, condition=None):
         x, log_abs_det = self.transformer.transform_and_log_abs_det_jacobian(
@@ -61,7 +62,7 @@ class Fixed(Bijection):
         return x, log_abs_det
 
     def inverse(self, x: Array, condition=None):
-        return self.bijection.inverse(x, *self.args)
+        return self.transformer.inverse(x, *self.args)
 
     def inverse_and_log_abs_det_jacobian(self, x: Array, condition=None):
         return self.transformer.inverse_and_log_abs_det_jacobian(x, *self.args)
