@@ -4,6 +4,18 @@ import jax
 from jax.scipy.special import erfc, erfinv
 from functools import partial
 
+def pos_domain(params, min_val):
+    params = params.reshape((-1, 2))
+    tail_params = min_val + jnp.exp(params)
+    return tail_params[:, 0], tail_params[:, 1]
+
+def min_max_domain(params, min_val, max_val):
+    params = params.reshape((-1, 2))
+    tail_params = jax.nn.sigmoid(params)
+    tail_params *= max_val - min_val
+    tail_params += min_val
+    return tail_params[:, 0], tail_params[:, 1]
+
 class ExtremeValueActivation(Transformer):
     """
     ExtremeValueActivation (D. Prangle, T. Hickling)
@@ -11,8 +23,10 @@ class ExtremeValueActivation(Transformer):
     This transform is Reals -> Reals.
     """
     def __init__( self, min_tail_param=1e-3, max_tail_param=1):
-        self.min_tail_param = min_tail_param
-        self.max_tail_param = max_tail_param
+        if max_tail_param is None:
+            self._get_args = lambda params: pos_domain(params, min_tail_param)
+        else:
+            self._get_args = lambda params: min_max_domain(params, min_tail_param, max_tail_param)
 
     @partial(jax.vmap, in_axes=[None, 0, 0, 0])
     def transform(self, u, pos_tail, neg_tail):
@@ -71,12 +85,8 @@ class ExtremeValueActivation(Transformer):
     def get_ranks(self, dim: int):
         return jnp.repeat(jnp.arange(dim), 2)
 
-    def get_args(self, params):
-        params = params.reshape((-1, 2))
-        tail_params = jax.nn.sigmoid(params)
-        tail_params *= self.max_tail_param - self.min_tail_param
-        tail_params += self.min_tail_param
-        return tail_params[:, 0], tail_params[:, 1]
+    def get_args(self, *args, **kwargs):
+        return self._get_args(*args, **kwargs)
 
 class TailTransformation(Transformer):
     """
@@ -85,8 +95,10 @@ class TailTransformation(Transformer):
     This transform is (-1, 1) -> Reals.
     """
     def __init__( self, min_tail_param=1e-3, max_tail_param=1):
-        self.min_tail_param = min_tail_param
-        self.max_tail_param = max_tail_param
+        if max_tail_param is None:
+            self._get_args = lambda params: pos_domain(params, min_tail_param)
+        else:
+            self._get_args = lambda params: min_max_domain(params, min_tail_param, max_tail_param)
 
     @partial(jax.vmap, in_axes=[None, 0, 0, 0])
     def transform(self, u, pos_tail, neg_tail):
@@ -133,9 +145,5 @@ class TailTransformation(Transformer):
     def get_ranks(self, dim: int):
         return jnp.repeat(jnp.arange(dim), 2)
 
-    def get_args(self, params):
-        params = params.reshape((-1, 2))
-        tail_params = jax.nn.sigmoid(params)
-        tail_params *= self.max_tail_param - self.min_tail_param
-        tail_params += self.min_tail_param
-        return tail_params[:, 0], tail_params[:, 1]
+    def get_args(self, *args, **kwargs):
+        return self._get_args(*args, **kwargs)
