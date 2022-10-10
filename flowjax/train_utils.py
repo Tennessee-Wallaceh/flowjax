@@ -7,7 +7,7 @@ import optax
 from tqdm import tqdm
 from typing import Optional, List, Dict, Tuple
 from flowjax.utils import Array
-
+import jax
 
 def train_flow(
     key: KeyArray,
@@ -37,7 +37,6 @@ def train_flow(
         clip_norm (float, optional): Maximum gradient norm before clipping occurs. Defaults to 0.5.
         show_progress (bool, optional): Whether to show progress bar. Defaults to True.
     """
-
     def loss(dist, x, condition=None):
         return -dist.log_prob(x, condition).mean()
 
@@ -125,6 +124,9 @@ def batch_train_flow(
         clip_norm (float, optional): Maximum gradient norm before clipping occurs. Defaults to 0.5.
         show_progress (bool, optional): Whether to show progress bar. Defaults to True.
     """
+    @eqx.filter_jit
+    def jloss(dist, x, condition=None):
+        return -dist.log_prob(x, condition).mean()
 
     def loss(dist, x, condition=None):
         return -dist.log_prob(x, condition).mean()
@@ -161,7 +163,7 @@ def batch_train_flow(
         losses["train"].append(epoch_train_loss)
 
         batch = tuple(a[:batch_size] for a in val_args)
-        epoch_val_loss = loss(dist, *batch).item()
+        epoch_val_loss = jloss(dist, *batch).item()
         losses["val"].append(epoch_val_loss)
 
         if epoch_val_loss == min(losses["val"]):
