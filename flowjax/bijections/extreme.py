@@ -63,7 +63,6 @@ class ExtremeValueActivation(Transformer):
 
     @partial(jax.vmap, in_axes=[None, 0, 0, 0])
     def inverse_and_log_abs_det_jacobian(self, x, pos_tail, neg_tail):
-        
         sign = jnp.sign(x)
         tail_param = jnp.where(sign > 0, pos_tail, neg_tail)
 
@@ -74,7 +73,7 @@ class ExtremeValueActivation(Transformer):
         transformed = sign * jnp.sqrt(2) * erfinv(1 - g)
     
         dt_dx = jnp.power(inner, -1 - 1/tail_param)
-        dt_dx *= 0.5 * sign * sign * jnp.sqrt(2) * jnp.sqrt(jnp.pi)
+        dt_dx *= 0.5 * jnp.sqrt(2) * jnp.sqrt(jnp.pi)
         dt_dx *= jnp.exp(jnp.square(erfinv(1 - g)))
 
         logabsdet = jnp.log(dt_dx)
