@@ -32,7 +32,7 @@ class Univariate(Bijection):
 
     def inverse(self, x: Array, condition=None):
         transform_args = self.transformer.get_args(self.params)
-        return self.bijection.inverse(x, *transform_args)
+        return self.transformer.inverse(x, *transform_args)
 
     def inverse_and_log_abs_det_jacobian(self, x: Array, condition=None):
         transform_args = self.transformer.get_args(self.params)
