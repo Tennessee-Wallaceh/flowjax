@@ -22,6 +22,7 @@ class ExtremeValueActivation(Transformer):
 
     This transform is Reals -> Reals.
     """
+    MIN_ERF_INV = 5e-7
     def __init__( self, min_tail_param=1e-3, max_tail_param=1):
         if max_tail_param is None:
             self._get_args = lambda params: pos_domain(params, min_tail_param)
@@ -50,11 +51,11 @@ class ExtremeValueActivation(Transformer):
         """
         x in reals
         """
-        x = jnp.clip(x, a_min=-1_000, a_max=1_000)
         sign = jnp.sign(x)
         tail_param = jnp.where(sign > 0, pos_tail, neg_tail)
 
         g = jnp.power(1 + tail_param * jnp.abs(x), -1 / tail_param)
+        g = jnp.clip(g, a_min=self.MIN_ERF_INV) # Should be in (0, 1]
 
         transformed = sign * jnp.sqrt(2) * erfinv(1 - g)
 
@@ -62,18 +63,19 @@ class ExtremeValueActivation(Transformer):
 
     @partial(jax.vmap, in_axes=[None, 0, 0, 0])
     def inverse_and_log_abs_det_jacobian(self, x, pos_tail, neg_tail):
-        x = jnp.clip(x, a_min=-1_000, a_max=1_000)
+        
         sign = jnp.sign(x)
         tail_param = jnp.where(sign > 0, pos_tail, neg_tail)
 
         inner = 1 + tail_param * jnp.abs(x)
         g = jnp.power(inner, -1 / tail_param)
+        g = jnp.clip(g, a_min=self.MIN_ERF_INV) # Should be in (0, 1]
 
         transformed = sign * jnp.sqrt(2) * erfinv(1 - g)
     
         dt_dx = jnp.power(inner, -1 - 1/tail_param)
         dt_dx *= 0.5 * sign * sign * jnp.sqrt(2) * jnp.sqrt(jnp.pi)
-        dt_dx *= jnp.exp(jnp.square(erfinv(1 - jnp.power(inner, -1/tail_param))))
+        dt_dx *= jnp.exp(jnp.square(erfinv(1 - g)))
 
         logabsdet = jnp.log(dt_dx)
 
