@@ -293,9 +293,6 @@ class StudentT(Distribution):
 
 
 class TwoSidedPareto(Distribution):
-    """
-    Implements student T distribution with specified degree of freedom.
-    """
     neg_tail: float
     pos_tail: float
     def __init__(self, dim, neg_tail=1., pos_tail=1.):
@@ -305,9 +302,11 @@ class TwoSidedPareto(Distribution):
         self.pos_tail = pos_tail
 
     def _log_prob(self, x: Array, condition: Optional[Array] = None):
-        # assert x.shape == (self.dim,)
-        # return jstats.t.logpdf(x, df=self.df).sum()
-        return jnp.nan
+        return jnp.log(jnp.where(
+            x < 0,
+            jstats.pareto.pdf(1 - x, self.neg_tail),
+            jstats.pareto.pdf(x + 1, self.pos_tail) 
+        ))
 
     def _sample(self, key: KeyArray, condition: Optional[Array] = None):
         key_1, key_2, key_3 = random.split(key, 3)
@@ -324,5 +323,4 @@ class TwoSidedPareto(Distribution):
             f'pos_tail={self.pos_tail:.2f} | '
             ')>'
         )
-
     
