@@ -50,10 +50,9 @@ class RationalQuadraticSplineTransformer(Transformer):
         # by setting up a linear spline from the edge of the bounding box
         # to B * 1e4
         pos_pad = jnp.zeros(self.K + 4)
-        pad_idxs = jnp.array([0, -1])
+        pad_idxs = jnp.array([0, 1, -2, -1])
         pad_vals = jnp.array(
-            [-B, B]
-            # [-B * 1e4, -B, B, B * 1e4]
+            [-B * 1e4, -B, B, B * 1e4]
         )  # Avoids jax control flow for identity tails
         """
         RationalQuadraticSplineTransformer (https://arxiv.org/abs/1906.04032). Ouside the interval
