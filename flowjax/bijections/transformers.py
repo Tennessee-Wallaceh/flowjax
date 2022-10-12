@@ -196,3 +196,31 @@ class ErfInv(Transformer):
 
     def get_args(self, params):
         return tuple()
+
+
+class Logit(Transformer):
+    """
+    U -> X logit
+    X -> U sigmoid
+    """
+    def transform(self, u):
+        return jnp.log((u + 1) / (1 - u))
+
+    def transform_and_log_abs_det_jacobian(self, u):
+        raise NotImplementedError
+
+    def inverse(self, x):
+        return 2 * jax.nn.sigmoid(x) - 1
+
+    def inverse_and_log_abs_det_jacobian(self, x):
+        sig = jax.nn.sigmoid(x)
+        return 2 * jax.nn.sigmoid(x) - 1, jnp.log(2 * sig * (1 - sig))
+
+    def num_params(self, dim):
+        return 0
+
+    def get_ranks(self, dim):
+        return jnp.tile(jnp.arange(dim), 2)
+
+    def get_args(self, params):
+        return tuple()
