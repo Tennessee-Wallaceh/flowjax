@@ -50,9 +50,10 @@ class RationalQuadraticSplineTransformer(Transformer):
         # by setting up a linear spline from the edge of the bounding box
         # to B * 1e4
         pos_pad = jnp.zeros(self.K + 4)
-        pad_idxs = jnp.array([0, 1, -2, -1])
+        pad_idxs = jnp.array([0, -1])
         pad_vals = jnp.array(
-            [-B * 1e4, -B, B, B * 1e4]
+            [-B, B]
+            # [-B * 1e4, -B, B, B * 1e4]
         )  # Avoids jax control flow for identity tails
         """
         RationalQuadraticSplineTransformer (https://arxiv.org/abs/1906.04032). Ouside the interval
@@ -72,6 +73,12 @@ class RationalQuadraticSplineTransformer(Transformer):
 
     @partial(jax.vmap, in_axes=[None, 0, 0, 0, 0])
     def transform(self, x, x_pos, y_pos, derivatives):
+        outside = jnp.logical_or(x < -self.B, x > self.B)
+        return jnp.where(
+            outside, x, self._transform(x, x_pos, y_pos, derivatives)
+        )
+
+    def _transform(self, x, x_pos, y_pos, derivatives):
         k = self._get_bin(x, x_pos)
         xi = (x - x_pos[k]) / (x_pos[k + 1] - x_pos[k])
         sk = (y_pos[k + 1] - y_pos[k]) / (x_pos[k + 1] - x_pos[k])
@@ -87,6 +94,12 @@ class RationalQuadraticSplineTransformer(Transformer):
 
     @partial(jax.vmap, in_axes=[None, 0, 0, 0, 0])
     def inverse(self, y, x_pos, y_pos, derivatives):
+        outside = jnp.logical_or(y < -self.B, y > self.B)
+        return jnp.where(
+            outside, y, self._inverse(y, x_pos, y_pos, derivatives)
+        )
+    
+    def _inverse(self, y, x_pos, y_pos, derivatives):
         k = self._get_bin(y, y_pos)
         xk, xk1, yk, yk1 = x_pos[k], x_pos[k + 1], y_pos[k], y_pos[k + 1]
         sk = (yk1 - yk) / (xk1 - xk)
@@ -96,13 +109,20 @@ class RationalQuadraticSplineTransformer(Transformer):
         c = -sk * (y - yk)
         sqrt_term = jnp.sqrt(b ** 2 - 4 * a * c)
         xi = (2 * c) / (-b - sqrt_term)
-        x = xi * (xk1 - xk) + xk
-        return x
+        return xi * (xk1 - xk) + xk
 
     def inverse_and_log_abs_det_jacobian(self, y, x_pos, y_pos, derivatives):
+        outside = jnp.logical_or(y < -self.B, y > self.B)
         x = self.inverse(y, x_pos, y_pos, derivatives)
-        derivative = self.derivative(x, x_pos, y_pos, derivatives)
-        return x, -jnp.log(derivative).sum()
+        _x = jnp.where(
+            outside, jnp.zeros_like(x), x
+        )
+        lad = jnp.where(
+            outside,
+            jnp.zeros_like(y),
+            -jnp.log(self.derivative(_x, x_pos, y_pos, derivatives))
+        )
+        return x, lad
 
     def num_params(self, dim: int):
         return (self.K * 3 - 1) * dim

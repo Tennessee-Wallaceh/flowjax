@@ -163,7 +163,10 @@ class StandardNormal(Distribution):
 
     def _log_prob(self, x: Array, condition: Optional[Array] = None):
         assert x.shape == (self.dim,)
-        return jstats.norm.logpdf(x).sum()
+        return jnp.clip(
+            jstats.norm.logpdf(x).sum(),
+            a_min=jnp.log(1e-37)
+        )
 
     def _sample(self, key: KeyArray, condition: Optional[Array] = None):
         return random.normal(key, (self.dim,))
@@ -275,21 +278,25 @@ class StudentT(Distribution):
     """
     Implements student T distribution with specified degree of freedom.
     """
-    df: Array
-    def __init__(self, dim, df=1.):
+    unc_df: Array
+    def __init__(self, dim, df=30.):
         self.dim = dim
         self.cond_dim = 0
-        self.df = jnp.array([df], dtype=jnp.float32)
+        self.unc_df = jnp.log(jnp.array([df]))
 
     def _log_prob(self, x: Array, condition: Optional[Array] = None):
         assert x.shape == (self.dim,)
-        return jstats.t.logpdf(x, df=self.df).sum()
+        # return jstats.t.logpdf(x, df=self.df).sum()
+        return jnp.clip(
+            jstats.t.logpdf(x, df=jnp.exp(self.unc_df)).sum(),
+            a_min=jnp.log(1e-37)
+        )
 
     def _sample(self, key: KeyArray, condition: Optional[Array] = None):
         return random.t(key, df=self.df, shape=(self.dim,))
 
     def __repr__(self):
-        return f'<FJ StudentT(df={self.df.item():.2f})>'
+        return f'<FJ StudentT(df={jnp.exp(self.unc_df).item():.2f})>'
 
 
 class TwoSidedPareto(Distribution):

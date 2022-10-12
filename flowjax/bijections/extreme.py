@@ -72,13 +72,11 @@ class ExtremeValueActivation(Transformer):
 
         transformed = sign * jnp.sqrt(2) * _erfcinv(g)
     
-        dt_dx = jnp.power(inner, -1 - 1/tail_param)
-        dt_dx *= 0.5 * jnp.sqrt(2) * jnp.sqrt(jnp.pi)
-        dt_dx *= jnp.exp(jnp.square(_erfcinv(g)))
+        lad = (-1 - 1 / tail_param) * jnp.log(inner)
+        lad += jnp.log(0.5 * jnp.sqrt(2) * jnp.sqrt(jnp.pi))
+        lad += jnp.square(_erfcinv(g))
 
-        logabsdet = jnp.log(dt_dx)
-
-        return transformed, logabsdet
+        return transformed, lad
 
     def num_params(self, dim: int) -> int:
         return dim * 2
@@ -135,10 +133,9 @@ class TailTransformation(Transformer):
         transformed = jnp.power(1 + sign * tail_param * x, neg_tail_inv)
         transformed = sign * (1 - transformed)
 
-        dt_dx = jnp.power(1 + sign * tail_param * x, neg_tail_inv - 1)
-        logabsdet = jnp.log(dt_dx)
+        lad = (neg_tail_inv - 1) * jnp.log(1 + sign * tail_param * x)
 
-        return transformed, logabsdet
+        return transformed, lad
 
     def num_params(self, dim: int) -> int:
         return dim * 2
