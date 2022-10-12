@@ -222,6 +222,8 @@ class Logit(Transformer):
     U -> X logit
     X -> U sigmoid
     """
+    MIN_SIG = 1e-15
+    MAX_SIG = 1 - 1e-7
     def transform(self, u):
         return jnp.log((u + 1) / (1 - u))
 
@@ -232,8 +234,12 @@ class Logit(Transformer):
         return 2 * jax.nn.sigmoid(x) - 1
 
     def inverse_and_log_abs_det_jacobian(self, x):
-        sig = jax.nn.sigmoid(x)
-        return 2 * jax.nn.sigmoid(x) - 1, jnp.log(2 * sig * (1 - sig))
+        sig = jnp.clip(
+            jax.nn.sigmoid(x), 
+            a_min=self.MIN_SIG, 
+            a_max=self.MAX_SIG,
+        )
+        return 2 * sig - 1, jnp.log(2 * sig * (1 - sig))
 
     def num_params(self, dim):
         return 0
