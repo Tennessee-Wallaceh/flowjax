@@ -1,8 +1,11 @@
 from flowjax.bijections.abc import Transformer
 import jax.numpy as jnp
 import jax
-from jax.scipy.special import erfc, erfinv
+from jax.scipy.special import erfc, ndtri
 from functools import partial
+
+def _erfcinv(x):
+    return -ndtri(0.5 * x) / jnp.sqrt(2)
 
 def pos_domain(params, min_val):
     params = params.reshape((-1, 2))
@@ -48,16 +51,13 @@ class ExtremeValueActivation(Transformer):
 
     @partial(jax.vmap, in_axes=[None, 0, 0, 0])
     def inverse(self, x, pos_tail, neg_tail):
-        """
-        x in reals
-        """
         sign = jnp.sign(x)
         tail_param = jnp.where(sign > 0, pos_tail, neg_tail)
 
         g = jnp.power(1 + tail_param * jnp.abs(x), -1 / tail_param)
         g = jnp.clip(g, a_min=self.MIN_ERF_INV) # Should be in (0, 1]
 
-        transformed = sign * jnp.sqrt(2) * erfinv(1 - g)
+        transformed = sign * jnp.sqrt(2) * _erfcinv(g)
 
         return transformed
 
@@ -70,11 +70,11 @@ class ExtremeValueActivation(Transformer):
         g = jnp.power(inner, -1 / tail_param)
         g = jnp.clip(g, a_min=self.MIN_ERF_INV) # Should be in (0, 1]
 
-        transformed = sign * jnp.sqrt(2) * erfinv(1 - g)
+        transformed = sign * jnp.sqrt(2) * _erfcinv(g)
     
         dt_dx = jnp.power(inner, -1 - 1/tail_param)
         dt_dx *= 0.5 * jnp.sqrt(2) * jnp.sqrt(jnp.pi)
-        dt_dx *= jnp.exp(jnp.square(erfinv(1 - g)))
+        dt_dx *= jnp.exp(jnp.square(_erfcinv(g)))
 
         logabsdet = jnp.log(dt_dx)
 
