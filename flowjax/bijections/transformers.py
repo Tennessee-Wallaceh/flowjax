@@ -37,6 +37,15 @@ class AffineTransformer(Transformer):
 
 
 class RationalQuadraticSplineTransformer(Transformer):
+    """
+    RationalQuadraticSplineTransformer (https://arxiv.org/abs/1906.04032). Ouside the interval
+    [-B, B], the identity transform is used. Each row of parameter matrices
+    (x_pos, y_pos, derivatives) corresponds to a column in x. 
+
+    Args:
+        K (int): Number of inner knots
+        B: (int): Interval to transform [-B, B]
+    """
     def __init__(
         self, K, B, min_bin_width=1e-3, min_bin_height=1e-3, min_derivative=1e-3
     ):
@@ -51,18 +60,8 @@ class RationalQuadraticSplineTransformer(Transformer):
         # to B * 1e4
         pos_pad = jnp.zeros(self.K + 4)
         pad_idxs = jnp.array([0, 1, -2, -1])
-        pad_vals = jnp.array(
-            [-B * 1e4, -B, B, B * 1e4]
-        )  # Avoids jax control flow for identity tails
-        """
-        RationalQuadraticSplineTransformer (https://arxiv.org/abs/1906.04032). Ouside the interval
-        [-B, B], the identity transform is used. Each row of parameter matrices
-        (x_pos, y_pos, derivatives) corresponds to a column in x. 
+        pad_vals = jnp.array([-B * 1e4, -B, B, B * 1e4])
 
-        Args:
-            K (int): Number of inner knots
-            B: (int): Interval to transform [-B, B]
-        """
         pos_pad = pos_pad.at[pad_idxs].set(pad_vals)
         self._pos_pad = pos_pad  # End knots and beyond
 
