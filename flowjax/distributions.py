@@ -11,6 +11,7 @@ from jax.random import KeyArray
 from flowjax.utils import Array
 from typing import Any
 import equinox as eqx
+from jax.scipy.special import ndtri
 
 # To construct a distribution, we define _log_prob and _sample, which take in vector arguments.
 # More friendly methods are then created from these, supporting batches of inputs.
@@ -148,6 +149,11 @@ class Transformed(Distribution):
         x = self.bijection.transform(z, condition)
         return x
 
+    def quantile(self, u, condition=None):
+        q_func = getattr(self, 'quantile', None)
+        assert q_func is not None, 'Quantile not implemented!'
+        return jax.vmap(self.bijection.transform)(self.base_dist.quantile(u), condition)
+
 
 class StandardNormal(Distribution):
     """
@@ -173,6 +179,9 @@ class StandardNormal(Distribution):
 
     def __repr__(self):
         return f'<FJ N(0, 1)>'
+
+    def quantile(self, u):
+        return ndtri(u)
 
 
 class Normal(Distribution):
@@ -235,6 +244,8 @@ class Uniform(Distribution):
     def __repr__(self):
         return f'<FlowJax Uniform([{self.min}, {self.max})>'
 
+    def quantile(self, u):
+        return (u  * (self.max - self.min)) + self.min
 
 class Gumbel(Distribution):
     """
@@ -255,6 +266,9 @@ class Gumbel(Distribution):
     def __repr__(self):
         return f'<FJ Gumbel(0, 1)>'
 
+    def quantile(self, u):
+        raise NotImplementedError
+        
 class Cauchy(Distribution):
     """
     Implements standard cauchy distribution (loc=0, scale=1)
@@ -273,6 +287,9 @@ class Cauchy(Distribution):
 
     def __repr__(self):
         return f'<FJ Cauchy(0, 1)>'
+
+    def quantile(self, u):
+        return jnp.tan(jnp.pi  * (u - 0.5))
 
 class StudentT(Distribution):
     """
@@ -293,7 +310,7 @@ class StudentT(Distribution):
         )
 
     def _sample(self, key: KeyArray, condition: Optional[Array] = None):
-        return random.t(key, df=self.df, shape=(self.dim,))
+        return random.t(key, df=jnp.exp(self.unc_df), shape=(self.dim,))
 
     def __repr__(self):
         return f'<FJ StudentT(df={jnp.exp(self.unc_df).item():.2f})>'
