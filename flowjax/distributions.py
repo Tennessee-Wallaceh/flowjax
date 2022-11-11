@@ -12,6 +12,9 @@ from flowjax.utils import Array
 from typing import Any
 import equinox as eqx
 from jax.scipy.special import ndtri
+from flowjax.bijections.univariate import Fixed
+from flowjax.bijections.extreme import TailTransformation
+from jax.scipy.stats import beta
 
 # To construct a distribution, we define _log_prob and _sample, which take in vector arguments.
 # More friendly methods are then created from these, supporting batches of inputs.
@@ -328,8 +331,8 @@ class TwoSidedPareto(Distribution):
     def _log_prob(self, x: Array, condition: Optional[Array] = None):
         return jnp.log(jnp.where(
             x < 0,
-            jstats.pareto.pdf(1 - x, self.neg_tail),
-            jstats.pareto.pdf(x + 1, self.pos_tail) 
+            0.5 * jstats.pareto.pdf(1 - x, self.neg_tail),
+            0.5 * jstats.pareto.pdf(x + 1, self.pos_tail)    
         ))
 
     def _sample(self, key: KeyArray, condition: Optional[Array] = None):
@@ -347,4 +350,118 @@ class TwoSidedPareto(Distribution):
             f'pos_tail={self.pos_tail:.2f} | '
             ')>'
         )
+
+
+class TwoSidedGPD(Distribution):
+    neg_tail: float
+    pos_tail: float
+    dist: Distribution
+    def __init__(self, dim, neg_tail=1., pos_tail=1.):
+        self.dim = dim
+        self.cond_dim = 0
+        self.neg_tail = neg_tail
+        self.pos_tail = pos_tail
+        self.dist = Transformed(
+            base_dist=Uniform(1, -1, 1), 
+            bijection=Fixed(
+                TailTransformation(None, None), 
+                jnp.array([pos_tail]), jnp.array([neg_tail])
+            )
+        )
+
+    def _log_prob(self, x: Array, condition: Optional[Array] = None):
+        return self.dist._log_prob(x)
+
+    def _sample(self, key: KeyArray, condition: Optional[Array] = None):
+        return self.dist._sample(key)
+
+    def __repr__(self):
+        return (
+            '<FJ TwoSideGPD('
+            f'neg_tail={self.neg_tail:.2f} | '
+            f'pos_tail={self.pos_tail:.2f} | '
+            ')>'
+        )
     
+
+class Beta(Distribution):
+    _a: Array
+    _b: Array
+    def __init__(self, dim, a=1., b=1.):
+        self.dim = dim
+        self.cond_dim = 0
+        self._a = jnp.log(jnp.array(a))
+        self._b = jnp.log(jnp.array(b))
+
+    @property
+    def a(self):
+        return jnp.exp(self._a)
+
+    @property
+    def b(self):
+        return jnp.exp(self._b)
+
+    def _log_prob(self, x: Array, condition: Optional[Array] = None):
+        return beta.logpdf(x, self.a, self.b)
+
+    def _sample(self, key: KeyArray, condition: Optional[Array] = None):
+        return random.beta(key, self.a, self.b, shape=(self.dim,))
+
+    def __repr__(self):
+        return (
+            '<FJ Beta('
+                f'a={self.a:.2f} | '
+                f'b={self.b:.2f} | '
+            ')>'
+        )
+
+
+class DoubleBeta(Distribution):
+    _a_neg: Array
+    _a_pos: Array
+    _b_neg: Array
+    _b_pos: Array
+    def __init__(self, dim, a_neg=1., a_pos=1., b_neg=1., b_pos=1.):
+        self.dim = dim
+        self.cond_dim = 0
+        self._a_neg = jnp.log(jnp.array(a_neg))
+        self._a_pos = jnp.log(jnp.array(a_pos))
+        self._b_neg = jnp.log(jnp.array(b_neg))
+        self._b_pos = jnp.log(jnp.array(b_pos))
+
+    @property
+    def a_neg(self):
+        return jnp.exp(self._a_neg)
+    
+    @property
+    def a_pos(self):
+        return jnp.exp(self._a_pos)
+
+    @property
+    def b_neg(self):
+        return jnp.exp(self._b_neg)
+
+    @property
+    def b_pos(self):
+        return jnp.exp(self._b_pos)
+
+    def _log_prob(self, x: Array, condition: Optional[Array] = None):
+        return jnp.log(jnp.where(
+            x < 0,
+            0.5 * beta.pdf(-x, self.a_neg, self.b_neg),
+            0.5 * beta.pdf(x, self.a_pos, self.b_pos)
+        ))
+
+    def _sample(self, key: KeyArray, condition: Optional[Array] = None):
+        key_1, key_2 = random.split(key)
+        raw_samp = jnp.where(
+            random.bernoulli(key_1, jnp.array([0.5])),
+            -random.beta(key_2, self.a_neg, self.b_neg, shape=(self.dim,)),
+            random.beta(key_2, self.a_pos, self.b_pos, shape=(self.dim,))
+        )
+        return jnp.clip(raw_samp, a_min=-1 + 1e-7, a_max=1 - 1e-7)
+
+    def __repr__(self):
+        return (
+            '<FJ DBeta()>'
+        )
