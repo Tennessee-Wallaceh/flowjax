@@ -1,9 +1,12 @@
 from flowjax.bijections.abc import Transformer
 import jax.numpy as jnp
 import jax
-from jax.scipy.special import erfc, ndtri, betainc
+from jax.scipy.special import erfc, ndtri
 from functools import partial
 from jaxopt import Bisection
+from jax.scipy.stats import beta
+from tensorflow_probability.substrates import jax as tfp
+from jax.scipy.special import gammainc, gammaln
 
 def _erfcinv(x):
     return -ndtri(0.5 * x) / jnp.sqrt(2)
@@ -47,7 +50,6 @@ class ExtremeValueActivation(Transformer):
         transformed *= jnp.power(g, -tail_param) - 1
         return transformed
 
-    @partial(jax.vmap, in_axes=[None, 0, 0, 0])
     def transform_and_log_abs_det_jacobian(self, u, pos_tail, neg_tail):
         sign = jnp.sign(u)
         tail_param = jnp.where(sign > 0, pos_tail, neg_tail)
@@ -60,7 +62,7 @@ class ExtremeValueActivation(Transformer):
         lad -= 0.5 * jnp.square(u) 
         lad += jnp.log(jnp.sqrt(2) / jnp.sqrt(jnp.pi))
 
-        return transformed, lad
+        return transformed, jnp.sum(lad)
 
     @partial(jax.vmap, in_axes=[None, 0, 0, 0])
     def inverse(self, x, pos_tail, neg_tail):
@@ -74,7 +76,6 @@ class ExtremeValueActivation(Transformer):
 
         return transformed
 
-    @partial(jax.vmap, in_axes=[None, 0, 0, 0])
     def inverse_and_log_abs_det_jacobian(self, x, pos_tail, neg_tail):
         sign = jnp.sign(x)
         tail_param = jnp.where(sign > 0, pos_tail, neg_tail)
@@ -89,7 +90,7 @@ class ExtremeValueActivation(Transformer):
         lad += jnp.log(0.5 * jnp.sqrt(2) * jnp.sqrt(jnp.pi))
         lad += jnp.square(_erfcinv(g))
 
-        return transformed, lad
+        return transformed, jnp.sum(lad)
 
     def num_params(self, dim: int) -> int:
         return dim * 2
@@ -99,115 +100,6 @@ class ExtremeValueActivation(Transformer):
 
     def get_args(self, *args, **kwargs):
         return self._get_args(*args, **kwargs)
-
-
-class FullActivation(Transformer):
-    """
-    FullActivation (D. Prangle, T. Hickling)
-
-    This transform is Reals -> Reals.
-    """
-    # MIN_ERF_INV = jnp.finfo(jnp.float32).smallest_normal
-    # MIN_ERF_INV = 5e-7
-    def __init__( self, min_tail_param=1e-3, max_tail_param=1):
-        if max_tail_param is None:
-            self._get_args = lambda params: pos_domain(params, min_tail_param)
-        else:
-            self._get_args = lambda params: min_max_domain(params, min_tail_param, max_tail_param)
-
-    @partial(jax.vmap, in_axes=[None, 0, 0, 0, 0])
-    def transform(self, z, pos_tail, neg_tail, df):
-        """
-        From light tailed real to heavy real
-        """
-        sign = jnp.sign(z)
-        tail_param = jnp.where(sign > 0, pos_tail, neg_tail)
-
-        u = df / (jnp.square(z) + df)
-        g = betainc(0.5 * df, 0.5, u)
-
-        transformed = sign / tail_param
-        transformed *= jnp.power(g, -tail_param) - 1
-
-        return transformed
-
-    @partial(jax.vmap, in_axes=[None, 0, 0, 0, 0])
-    def transform_and_log_abs_det_jacobian(self, z, pos_tail, neg_tail, df):
-        sign = jnp.sign(z)
-        tail_param = jnp.where(sign > 0, pos_tail, neg_tail)
-
-        u = df / (jnp.square(z) + df)
-        g = betainc(0.5 * df, 0.5, u)
-
-        transformed = sign / tail_param
-        transformed *= jnp.power(g, -tail_param) - 1
-
-        sq_z = jnp.square(z) + df
-
-        lad = -(0.5 * df - 1) * jnp.log(1 - df / sq_z)
-        lad += 0.5 * jnp.log(df / sq_z)
-        lad += 2 * jnp.log(sq_z)
-        lad -= jnp.log(df * z)
-
-        return transformed, lad
-
-    @partial(jax.vmap, in_axes=[None, 0, 0, 0, 0])
-    def inverse(self, x, pos_tail, neg_tail, df):
-        sign = jnp.sign(x)
-        tail_param = jnp.where(sign > 0, pos_tail, neg_tail)
-
-        inner = 1 + tail_param * jnp.abs(x)
-        g = jnp.power(inner, -1 / tail_param)
-
-        target = lambda u: betainc(0.5 * df, 0.5, u)  - g # Ie the z which gives x
-
-        bisec = Bisection(
-            optimality_fun=target,
-            lower=0, 
-            upper=10000
-        )
-        u = bisec.run().params
-        g_inv = jnp.sqrt(1 + 1 / u)
-
-        transformed = sign * jnp.sqrt(2) * g_inv
-
-        return transformed
-
-    @partial(jax.vmap, in_axes=[None, 0, 0, 0, 0])
-    def inverse_and_log_abs_det_jacobian(self, x, pos_tail, neg_tail, df):
-        sign = jnp.sign(x)
-        tail_param = jnp.where(sign > 0, pos_tail, neg_tail)
-
-        inner = 1 + tail_param * jnp.abs(x)
-        g = jnp.power(inner, -1 / tail_param)
-        g = jnp.clip(g, a_min=self.MIN_ERF_INV) # Should be in (0, 1]
-
-        target = lambda u: betainc(0.5 * df, 0.5, u)  - g # Ie the z which gives x
-
-        bisec = Bisection(
-            optimality_fun=target,
-            lower=0, 
-            upper=10000
-        )
-        u = bisec.run().params
-        g_inv = jnp.sqrt(1 + 1 / u)
-
-        transformed = sign * jnp.sqrt(2) * g_inv
-    
-        lad = (-1 - 1 / tail_param) * jnp.log(inner)
-        lad += jnp.log(0.5 * jnp.sqrt(2) * jnp.sqrt(jnp.pi))
-        lad += jnp.square(_erfcinv(g))
-
-        return transformed, lad
-
-    def num_params(self, dim: int) -> int:
-        return dim * 3
-    
-    def get_ranks(self, dim: int):
-        return jnp.repeat(jnp.arange(dim), 3)
-
-    def get_args(self, params):
-        return self._get_args(params[:, :2]), jnp.exp(params[:, 2])
 
 
 class TailTransformation(Transformer):
@@ -234,7 +126,15 @@ class TailTransformation(Transformer):
 
     @partial(jax.vmap, in_axes=[None, 0, 0, 0])
     def transform_and_log_abs_det_jacobian(self, u, pos_tail, neg_tail):
-        pass
+        sign = jnp.sign(u)
+        tail_param = jnp.where(sign > 0, pos_tail, neg_tail)
+
+        transformed = sign / tail_param
+        transformed *= jnp.power(1 - jnp.abs(u), -tail_param) - 1
+
+        lad = (-tail_param - 1) * jnp.log(1 - jnp.abs(u))
+        
+        return transformed, lad
 
     @partial(jax.vmap, in_axes=[None, 0, 0, 0])
     def inverse(self, x, pos_tail, neg_tail):
@@ -270,70 +170,200 @@ class TailTransformation(Transformer):
         return self._get_args(*args, **kwargs)
 
 
-class Kuma(Transformer):
+class SwitchTransform(Transformer):
     """
-    Kumasawary transform
+    SwitchTransform (D. Prangle, T. Hickling)
 
-    This transform is (-1, 1) -> (-1, 1).
+    This transform is Reals -> Reals.
+
+    The parameter is unconstrained.
     """
-    @partial(jax.vmap, in_axes=[None, 0, 0, 0, 0, 0])
-    def transform(self, u, a_neg, b_neg, a_pos, b_pos):
-        sign = jnp.sign(u)
-        a = jnp.where(sign > 0, a_pos, a_neg)
-        b = jnp.where(sign > 0, b_pos, b_neg)
+    MIN_ERF_INV = 5e-7
+    @partial(jax.vmap, in_axes=[None, 0, 0, 0])
+    def transform(self, z, pos_tail, neg_tail):
+        sign = jnp.sign(z)
+        tail_param = jnp.where(sign > 0, pos_tail, neg_tail)
+        heavy_param = jnp.abs(tail_param)
+        light_param = -jnp.abs(tail_param)
 
-        transformed = jnp.power(1 - jnp.abs(u), 1 / b)
-        transformed = sign * jnp.power(1 - transformed, 1 / a)
-        transformed = jnp.clip(transformed, -1 + 1e-7, 1 - 1e-7)
-        return transformed
+        g = erfc(jnp.abs(z) / jnp.sqrt(2))
+        heavy_transformed = sign / heavy_param
+        heavy_transformed *= jnp.power(g, -tail_param) - 1
 
-    @partial(jax.vmap, in_axes=[None, 0, 0, 0, 0, 0])
-    def transform_and_log_abs_det_jacobian(self, u, a_neg, b_neg, a_pos, b_pos):
-        pass
-
-    @partial(jax.vmap, in_axes=[None, 0, 0, 0, 0, 0])
-    def inverse(self, x, a_neg, b_neg, a_pos, b_pos):
-        sign = jnp.sign(x)
-        x = jnp.clip(x, -1 + 1e-7, 1 - 1e-7)
-        a = jnp.where(sign > 0, a_pos, a_neg)
-        b = jnp.where(sign > 0, b_pos, b_neg)
-
-        x_abs = jnp.abs(x)
-        transformed = 1 - jnp.power(x_abs, a)
-        transformed = sign * (1 - jnp.power(transformed, b))
-
-        return transformed
-
-    @partial(jax.vmap, in_axes=[None, 0, 0, 0, 0, 0])
-    def inverse_and_log_abs_det_jacobian(self, x,  a_neg, b_neg, a_pos, b_pos):
-        sign = jnp.sign(x)
-        x = jnp.clip(x, -1 + 1e-7, 1 - 1e-7)
-        a = jnp.where(sign > 0, a_pos, a_neg)
-        b = jnp.where(sign > 0, b_pos, b_neg)
-        x_abs = jnp.abs(x)
-
-        transformed = 1 - jnp.power(x_abs, a)
-        transformed = sign * (1 - jnp.power(transformed, b))
+        light_transformed = sign * jnp.power(jnp.abs(z), 2 + light_param)
         
-        d_dx = jnp.power(1 - jnp.power(x_abs, a), b - 1)
-        d_dx *= jnp.power(x_abs, a - 1)
-        d_dx *= a * b
+        return jnp.where(
+            tail_param > 0, 
+            heavy_transformed,
+            light_transformed
+        )
 
-        return transformed, jnp.log(d_dx)
+    @partial(jax.vmap, in_axes=[None, 0, 0, 0])
+    def transform_and_log_abs_det_jacobian(self, u, pos_tail, neg_tail):
+        raise NotImplementedError
+
+    @partial(jax.vmap, in_axes=[None, 0, 0, 0])
+    def inverse(self, x, pos_tail, neg_tail):
+        sign = jnp.sign(x)
+        tail_param = jnp.where(sign > 0, pos_tail, neg_tail)
+        heavy_param = jnp.abs(tail_param)
+        light_param = -jnp.abs(tail_param)
+
+        g = jnp.power(1 + heavy_param * jnp.abs(x), -1 / heavy_param)
+        g = jnp.clip(g, a_min=self.MIN_ERF_INV) # Should be in (0, 1]
+        heavy_transformed = sign * jnp.sqrt(2) * _erfcinv(g)
+
+        x_adj = jnp.clip(jnp.abs(x), 1e-6)
+        light_transformed = sign * jnp.power(x_adj, 1 / (2 + light_param))
+
+        return jnp.where(
+            tail_param > 0, 
+            heavy_transformed, 
+            light_transformed
+        )
+
+    @partial(jax.vmap, in_axes=[None, 0, 0, 0])
+    def inverse_and_log_abs_det_jacobian(self, x, pos_tail, neg_tail):
+        sign = jnp.sign(x)
+        tail_param = jnp.where(sign > 0, pos_tail, neg_tail)
+        heavy_param = jnp.abs(tail_param)
+        light_param = -jnp.abs(tail_param)
+
+        inner = 1 + heavy_param * jnp.abs(x)
+        g = jnp.power(inner, -1 / heavy_param)
+        g = jnp.clip(g, a_min=self.MIN_ERF_INV) # Should be in (0, 1]
+        heavy_transformed = sign * jnp.sqrt(2) * _erfcinv(g)
+
+        heavy_lad = (-1 - 1 / heavy_param) * jnp.log(inner)
+        heavy_lad += jnp.log(0.5 * jnp.sqrt(2) * jnp.sqrt(jnp.pi))
+        heavy_lad += jnp.square(_erfcinv(g))
+
+        x_adj = jnp.clip(jnp.abs(x), 1e-6)
+        light_transformed = sign * jnp.power(x_adj, 1 / (2 + light_param))
+        light_lad = -jnp.log(2 + light_param)
+        light_lad -= (1 + light_param) * jnp.log(x_adj) / (2 + light_param)
+        
+        # select whether we wanted the heavy or light transformation
+        transformed = jnp.where(tail_param > 0, heavy_transformed, light_transformed)
+        lad = jnp.where(tail_param > 0, heavy_lad, light_lad)
+        
+        return transformed, lad
 
     def num_params(self, dim: int) -> int:
-        return dim * 4
+        return dim * 2
     
     def get_ranks(self, dim: int):
-        return jnp.repeat(jnp.arange(dim), 4)
+        return jnp.repeat(jnp.arange(dim), 2)
 
     def get_args(self, params):
-        params = params.reshape((-1, 4))
-        # transformed = jax.nn.sigmoid(params)
-        transformed = jnp.exp(params)
-        return (
-            transformed[:, 0], 
-            transformed[:, 1], 
-            transformed[:, 2], 
-            transformed[:, 3]
-        )
+        params = jnp.exp(params.reshape((-1, 2))) - 1
+        return params[:, 0], params[:, 1]
+
+
+class ShiftChi(Transformer):
+    """
+    ShiftChi (D. Prangle, T. Hickling)
+
+    This transform is (-1, 1) -> Reals.
+
+    The parameter is unconstrained.
+    """
+    @partial(jax.vmap, in_axes=[None, 0, 0, 0])
+    def transform(self, u, pos_tail, neg_tail):
+        sign = jnp.sign(u)
+        tail_param = jnp.where(sign > 0, pos_tail, neg_tail)
+
+        g = (jnp.abs(u) - 1) * (1 - gammainc(tail_param, 1)) + 1
+        x = tfp.math.igammainv(tail_param, g) - 1
+
+        return sign * x
+
+    @partial(jax.vmap, in_axes=[None, 0, 0, 0])
+    def transform_and_log_abs_det_jacobian(self, u, pos_tail, neg_tail):
+        raise NotImplementedError 
+
+    @partial(jax.vmap, in_axes=[None, 0, 0, 0])
+    def inverse(self, x, pos_tail, neg_tail):
+        sign = jnp.sign(x)
+        tail_param = jnp.where(sign > 0, pos_tail, neg_tail)
+
+        transformed = gammainc(tail_param, jnp.abs(x) + 1) - 1
+        transformed /= 1 - gammainc(tail_param,  1)
+        transformed += 1
+
+        return sign * transformed
+
+    @partial(jax.vmap, in_axes=[None, 0, 0, 0])
+    def inverse_and_log_abs_det_jacobian(self, x, pos_tail, neg_tail):
+        sign = jnp.sign(x)
+        tail_param = jnp.where(sign > 0, pos_tail, neg_tail)
+
+        transformed = gammainc(tail_param, jnp.abs(x) + 1) - 1
+        transformed /= 1 - gammainc(tail_param,  1)
+        transformed += 1
+
+        lad = (tail_param - 1) * jnp.log(jnp.abs(x) + 1)
+        lad -= (jnp.abs(x) + 1)
+        lad -= gammaln(tail_param) + jnp.log(1 - gammainc(tail_param, 1))
+        
+        return sign * transformed, lad
+
+    def num_params(self, dim: int) -> int:
+        return dim * 2
+    
+    def get_ranks(self, dim: int):
+        return jnp.repeat(jnp.arange(dim), 2)
+
+    def get_args(self, params):
+        params = jax.nn.sigmoid(params.reshape((-1, 2)))
+        return params[:, 0], params[:, 1]
+
+class Power(Transformer):
+    """
+    Power (D. Prangle, T. Hickling)
+
+    This transform is Reals -> Reals.
+
+    The parameter is in [0, -1].
+    """
+    @partial(jax.vmap, in_axes=[None, 0, 0, 0])
+    def transform(self, z, pos_tail, neg_tail):
+        sign = jnp.sign(z)
+        tail_param = jnp.where(sign > 0, pos_tail, neg_tail)
+        transformed = sign * jnp.power(jnp.abs(z), 2 + tail_param)
+        return transformed
+
+    @partial(jax.vmap, in_axes=[None, 0, 0, 0])
+    def transform_and_log_abs_det_jacobian(self, u, pos_tail, neg_tail):
+        raise NotImplementedError 
+
+    @partial(jax.vmap, in_axes=[None, 0, 0, 0])
+    def inverse(self, x, pos_tail, neg_tail):
+        sign = jnp.sign(x)
+        x_adj = jnp.clip(jnp.abs(x), 1e-6)
+        tail_param = jnp.where(sign > 0, pos_tail, neg_tail)
+        transformed = sign * jnp.power(x_adj, 1 / (2 + tail_param))
+        return transformed
+
+    @partial(jax.vmap, in_axes=[None, 0, 0, 0])
+    def inverse_and_log_abs_det_jacobian(self, x, pos_tail, neg_tail):
+        sign = jnp.sign(x)
+        tail_param = jnp.where(sign > 0, pos_tail, neg_tail)
+        x_adj = jnp.clip(jnp.abs(x), 1e-6)
+        
+        transformed = sign * jnp.power(x_adj, 1 / (2 + tail_param))
+
+        lad = -jnp.log(2 + tail_param)
+        lad -= (1 + tail_param) * jnp.log(x_adj) / (2 + tail_param)
+
+        return  transformed, lad
+
+    def num_params(self, dim: int) -> int:
+        return dim * 2
+    
+    def get_ranks(self, dim: int):
+        return jnp.repeat(jnp.arange(dim), 2)
+
+    def get_args(self, params):
+        params = -jax.nn.sigmoid(params.reshape((-1, 2)))
+        return params[:, 0], params[:, 1]
