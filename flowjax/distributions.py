@@ -11,10 +11,14 @@ from jax.random import KeyArray
 from flowjax.utils import Array
 from typing import Any
 import equinox as eqx
-from jax.scipy.special import ndtri
+from jax.scipy.special import ndtri, gammainc
 from flowjax.bijections.univariate import Fixed
 from flowjax.bijections.extreme import TailTransformation
 from jax.scipy.stats import beta
+
+# Tensorflow probability substrates
+import tensorflow_probability as tfp
+tquantile = tfp.substrates.jax.distributions.student_t.quantile
 
 # To construct a distribution, we define _log_prob and _sample, which take in vector arguments.
 # More friendly methods are then created from these, supporting batches of inputs.
@@ -102,6 +106,9 @@ class Distribution(eqx.Module, ABC):
                 in_axes = [0 if a.ndim == 2 else None for a in (x, condition)]
                 return jax.vmap(self._log_prob, in_axes)(x, condition)
 
+    def icdf(self):
+        raise NotImplementedError
+
     def _argcheck_x(self, x: Array):
         if x.ndim not in (1,2):
             raise ValueError("x.ndim should be 1 or 2")
@@ -153,9 +160,8 @@ class Transformed(Distribution):
         return x
 
     def quantile(self, u, condition=None):
-        q_func = getattr(self, 'quantile', None)
-        assert q_func is not None, 'Quantile not implemented!'
-        return jax.vmap(self.bijection.transform)(self.base_dist.quantile(u), condition)
+        base_quantiles = self.base_dist.quantile(u)
+        return jax.vmap(self.bijection.transform)(base_quantiles, condition)
 
 
 class StandardNormal(Distribution):
@@ -215,6 +221,9 @@ class Normal(Distribution):
     def __repr__(self):
         return f'<FJ N({self.mean}, {self.std})>'
 
+    def quantile(self, u):
+        return ndtri(u)
+
 class Uniform(Distribution):
     """
     Implements a Uniform distribution defined over a min and max val.
@@ -250,6 +259,7 @@ class Uniform(Distribution):
     def quantile(self, u):
         return (u  * (self.max - self.min)) + self.min
 
+
 class Gumbel(Distribution):
     """
     Implements standard gumbel distribution (loc=0, scale=1)
@@ -271,7 +281,8 @@ class Gumbel(Distribution):
 
     def quantile(self, u):
         raise NotImplementedError
-        
+
+   
 class Cauchy(Distribution):
     """
     Implements standard cauchy distribution (loc=0, scale=1)
@@ -293,6 +304,7 @@ class Cauchy(Distribution):
 
     def quantile(self, u):
         return jnp.tan(jnp.pi  * (u - 0.5))
+
 
 class StudentT(Distribution):
     """
@@ -318,39 +330,13 @@ class StudentT(Distribution):
     def __repr__(self):
         return f'<FJ StudentT(df={jnp.exp(self.unc_df).item():.2f})>'
 
-
-class TwoSidedPareto(Distribution):
-    neg_tail: float
-    pos_tail: float
-    def __init__(self, dim, neg_tail=1., pos_tail=1.):
-        self.dim = dim
-        self.cond_dim = 0
-        self.neg_tail = neg_tail
-        self.pos_tail = pos_tail
-
-    def _log_prob(self, x: Array, condition: Optional[Array] = None):
-        return jnp.log(jnp.where(
-            x < 0,
-            0.5 * jstats.pareto.pdf(1 - x, self.neg_tail),
-            0.5 * jstats.pareto.pdf(x + 1, self.pos_tail)    
-        ))
-
-    def _sample(self, key: KeyArray, condition: Optional[Array] = None):
-        key_1, key_2, key_3 = random.split(key, 3)
-        return jnp.where(
-            random.bernoulli(key_1, jnp.array([0.5])),
-            1 - random.pareto(key_2, self.neg_tail),
-            random.pareto(key_3, self.pos_tail) - 1
+    def quantile(self, u):
+        return tquantile(
+            u, 
+            jnp.exp(self.unc_df),
+            jnp.array([0.0]),
+            jnp.array([1.0])
         )
-
-    def __repr__(self):
-        return (
-            '<FJ Pareto('
-            f'neg_tail={self.neg_tail:.2f} | '
-            f'pos_tail={self.pos_tail:.2f} | '
-            ')>'
-        )
-
 
 class TwoSidedGPD(Distribution):
     neg_tail: float
@@ -382,86 +368,31 @@ class TwoSidedGPD(Distribution):
             f'pos_tail={self.pos_tail:.2f} | '
             ')>'
         )
-    
 
-class Beta(Distribution):
-    _a: Array
-    _b: Array
-    def __init__(self, dim, a=1., b=1.):
+
+class HalfStudentT(Distribution):
+    unc_df: Array
+    def __init__(self, dim, df=1.):
         self.dim = dim
         self.cond_dim = 0
-        self._a = jnp.log(jnp.array(a))
-        self._b = jnp.log(jnp.array(b))
-
-    @property
-    def a(self):
-        return jnp.exp(self._a)
-
-    @property
-    def b(self):
-        return jnp.exp(self._b)
+        self.unc_df = jnp.log(jnp.array([df]))
 
     def _log_prob(self, x: Array, condition: Optional[Array] = None):
-        return beta.logpdf(x, self.a, self.b)
+        return jnp.clip(
+            jnp.log(2) + jstats.t.logpdf(x, df=jnp.exp(self.unc_df)),
+            a_min=jnp.log(1e-37)
+        ) 
 
     def _sample(self, key: KeyArray, condition: Optional[Array] = None):
-        return random.beta(key, self.a, self.b, shape=(self.dim,))
+        df = jnp.exp(self.unc_df)
+        beta = random.beta(key, 0.5 * df, 0.5, shape=(self.dim,))
+        x = jnp.sqrt(df / beta - df)
+        return x
 
     def __repr__(self):
         return (
-            '<FJ Beta('
-                f'a={self.a:.2f} | '
-                f'b={self.b:.2f} | '
+            '<FJ HalfStudentT('
+            f'neg_tail={self.neg_tail:.2f} | '
+            f'pos_tail={self.pos_tail:.2f} | '
             ')>'
-        )
-
-
-class DoubleBeta(Distribution):
-    _a_neg: Array
-    _a_pos: Array
-    _b_neg: Array
-    _b_pos: Array
-    def __init__(self, dim, a_neg=1., a_pos=1., b_neg=1., b_pos=1.):
-        self.dim = dim
-        self.cond_dim = 0
-        self._a_neg = jnp.log(jnp.array(a_neg))
-        self._a_pos = jnp.log(jnp.array(a_pos))
-        self._b_neg = jnp.log(jnp.array(b_neg))
-        self._b_pos = jnp.log(jnp.array(b_pos))
-
-    @property
-    def a_neg(self):
-        return jnp.exp(self._a_neg)
-    
-    @property
-    def a_pos(self):
-        return jnp.exp(self._a_pos)
-
-    @property
-    def b_neg(self):
-        return jnp.exp(self._b_neg)
-
-    @property
-    def b_pos(self):
-        return jnp.exp(self._b_pos)
-
-    def _log_prob(self, x: Array, condition: Optional[Array] = None):
-        return jnp.log(jnp.where(
-            x < 0,
-            0.5 * beta.pdf(-x, self.a_neg, self.b_neg),
-            0.5 * beta.pdf(x, self.a_pos, self.b_pos)
-        ))
-
-    def _sample(self, key: KeyArray, condition: Optional[Array] = None):
-        key_1, key_2 = random.split(key)
-        raw_samp = jnp.where(
-            random.bernoulli(key_1, jnp.array([0.5])),
-            -random.beta(key_2, self.a_neg, self.b_neg, shape=(self.dim,)),
-            random.beta(key_2, self.a_pos, self.b_pos, shape=(self.dim,))
-        )
-        return jnp.clip(raw_samp, a_min=-1 + 1e-7, a_max=1 - 1e-7)
-
-    def __repr__(self):
-        return (
-            '<FJ DBeta()>'
         )
