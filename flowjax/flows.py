@@ -103,7 +103,12 @@ def masked_autoregressive_flow(
 
         bijections = [
             MaskedAutoregressive(
-                key, transformer, base_dist.dim, cond_dim, nn_width, nn_depth, nn_activation
+                key, 
+                transformer, 
+                base_dist.dim, 
+                cond_dim, nn_width, 
+                nn_depth, 
+                nn_activation
             )
             for key in layer_keys
         ]
@@ -112,7 +117,7 @@ def masked_autoregressive_flow(
             bijections = intertwine_flip(bijections)
         elif permute_strategy == "random":
             bijections = intertwine_random_permutation(permute_key, bijections, base_dist.dim)
-        elif permute_strategy != "none":
+        elif permute_strategy is not None:
             raise ValueError("Permute strategy should be 'flip', 'random' or 'none', if specified.")
 
         bijection = Chain(bijections)
