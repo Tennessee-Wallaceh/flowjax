@@ -36,6 +36,31 @@ class AffineTransformer(Transformer):
         return loc, jnp.exp(log_scale)
 
 
+class ScaleTransformer(Transformer):
+    "Scale transformation compatible with neural network parameterisation."
+
+    def transform(self, x, scale):
+        return x * scale
+
+    def transform_and_log_abs_det_jacobian(self, x, scale):
+        return x * scale, jnp.log(scale)
+
+    def inverse(self, y, scale):
+        return y / scale
+
+    def inverse_and_log_abs_det_jacobian(self, y, scale):
+        return y / scale, -jnp.log(scale)
+
+    def num_params(self, dim):
+        return dim
+
+    def get_ranks(self, dim):
+        return jnp.tile(jnp.arange(dim), 1)
+
+    def get_args(self, params):
+        return (jnp.exp(params), )
+
+
 class RationalQuadraticSplineTransformer(Transformer):
     """
     RationalQuadraticSplineTransformer (https://arxiv.org/abs/1906.04032). Ouside the interval
@@ -47,13 +72,15 @@ class RationalQuadraticSplineTransformer(Transformer):
         B: (int): Interval to transform [-B, B]
     """
     def __init__(
-        self, K, B, min_bin_width=1e-3, min_bin_height=1e-3, min_derivative=1e-3
+        self, K, B, min_bin_width=1e-3, min_bin_height=1e-3, min_derivative=1e-3,
+        left_trainable=False
     ):
         self.K = K
         self.B = B
         self.min_bin_width = min_bin_width
         self.min_bin_height = min_bin_height
         self.min_derivative = min_derivative
+        self.left_trainable = left_trainable
 
         # Padding logic avoids jax control flow for identity tails,
         # by setting up a linear spline from the edge of the bounding box
@@ -122,14 +149,20 @@ class RationalQuadraticSplineTransformer(Transformer):
         )
         return x, lad
 
+    def _num_params_per_dim(self):
+        if self.left_trainable:
+            return (self.K * 3)
+        else:
+            return (self.K * 3 - 1)
+
     def num_params(self, dim: int):
-        return (self.K * 3 - 1) * dim
+        return self._num_params_per_dim() * dim
 
     def get_ranks(self, dim: int):
-        return jnp.repeat(jnp.arange(dim), self.K * 3 - 1)
+        return jnp.repeat(jnp.arange(dim), self._num_params_per_dim())
 
     def get_args(self, params):
-        params = params.reshape((-1, self.K * 3 - 1))
+        params = params.reshape((-1, self._num_params_per_dim()))
         return jax.vmap(self._get_args)(params)
 
     def _get_args(self, params):
@@ -139,9 +172,15 @@ class RationalQuadraticSplineTransformer(Transformer):
 
         heights = jax.nn.softmax(params[self.K : self.K * 2]) * 2 * self.B
         heights = self.min_bin_height + (1 - self.min_bin_height * self.K) * heights
+        
+        # if we are left trainable, we have an extra param and pad only right side
+        if self.left_trainable:
+            derivatives = jax.nn.softplus(params[self.K * 2:]) + self.min_derivative
+            derivatives = jnp.pad(derivatives, (1, 2), constant_values=1)
+        else:
+            derivatives = jax.nn.softplus(params[self.K * 2:]) + self.min_derivative
+            derivatives = jnp.pad(derivatives, 2, constant_values=1)
 
-        derivatives = jax.nn.softplus(params[self.K * 2 :]) + self.min_derivative
-        derivatives = jnp.pad(derivatives, 2, constant_values=1)
         x_pos = jnp.cumsum(widths) - self.B
         x_pos = self.pos_pad.at[2:-2].set(x_pos)
         y_pos = jnp.cumsum(heights) - self.B
@@ -245,6 +284,84 @@ class Logit(Transformer):
 
     def get_ranks(self, dim):
         return jnp.tile(jnp.arange(dim), 2)
+
+    def get_args(self, params):
+        return tuple()
+
+
+class Exponential(Transformer):
+    """
+    Z -> X exp
+    X -> Z log
+    """
+    def transform(self, z):
+        return jnp.exp(z)
+
+    def transform_and_log_abs_det_jacobian(self, u):
+        raise NotImplementedError
+
+    def inverse(self, x):
+        return jnp.log(x)
+
+    def inverse_and_log_abs_det_jacobian(self, x):
+        return jnp.log(x), jnp.log(1 / x)
+
+    def num_params(self, dim):
+        return 0
+
+    def get_ranks(self, dim):
+        return jnp.tile(jnp.arange(dim), 2)
+
+    def get_args(self, params):
+        return tuple()
+
+class Softplus(Transformer):
+    """
+    Z -> X exp
+    X -> Z log
+    """
+    THRESHOLD=10
+    def transform(self, z):
+        return jnp.where(
+            z > self.THRESHOLD,
+            z,
+            jax.nn.softplus(z)
+        )
+
+    def transform_and_log_abs_det_jacobian(self, z):
+        x = jnp.where(
+            z > self.THRESHOLD,
+            z,
+            jax.nn.softplus(z)
+        )
+        log_abs_det_jacobian = jnp.where(
+            z > self.THRESHOLD,
+            z,
+            z - jax.nn.softplus(z)
+        )
+        return x, log_abs_det_jacobian
+
+    def inverse(self, x):
+        return jnp.where(
+            x > self.THRESHOLD,
+            x,
+            jnp.log(jnp.exp(x))
+        )
+
+    def inverse_and_log_abs_det_jacobian(self, x):
+        z = jnp.where(
+            x > self.THRESHOLD,
+            x,
+            jnp.log(jnp.exp(x))
+        )
+        log_abs_det_jacobian = x - z
+        return z, log_abs_det_jacobian
+
+    def num_params(self, dim):
+        return 0
+
+    def get_ranks(self, dim):
+        return jnp.tile(jnp.arange(dim), 0)
 
     def get_args(self, params):
         return tuple()
