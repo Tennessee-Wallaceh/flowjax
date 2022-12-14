@@ -1,4 +1,5 @@
 from flowjax.bijections.abc import Transformer
+import jax
 import jax.numpy as jnp
 from flowjax.bijections.abc import Bijection
 from flowjax.utils import Array
@@ -6,8 +7,7 @@ from jax import random
 
 class Univariate(Bijection):
     """
-    A class implementing a Bijection for the 
-    unconditional univariate case.
+    A class implementing a Bijection for the unconditional univariate case.
     """
     transformer: Transformer
     cond_dim: int
@@ -46,11 +46,15 @@ class Fixed(Bijection):
     """
     transformer: Transformer
     cond_dim: int
-    args: Array
+    _args: Array
     def __init__(self, transformer: Transformer, *args):
         self.transformer = transformer
         self.cond_dim = 0
-        self.args = args
+        self._args = args
+
+    @property
+    def args(self):
+        return jax.lax.stop_gradient(self._args)
 
     def transform(self, z: Array, condition=None):
         return self.transformer.transform(z, *self.args)
