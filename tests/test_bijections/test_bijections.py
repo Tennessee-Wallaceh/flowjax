@@ -1,34 +1,43 @@
 "General tests for bijections (including transformers)."
+import equinox as eqx
+import jax
+import jax.numpy as jnp
 import pytest
 from jax import random
-import jax.numpy as jnp
-import jax
-from flowjax.bijections.transformers import (
+
+from flowjax.bijections import (
+    AdditiveLinearCondition,
+    Affine,
+    BlockAutoregressiveNetwork,
+    Chain,
+    Coupling,
+    EmbedCondition,
+    Flip,
+    MaskedAutoregressive,
+    Partial,
+    Permute,
+    ScannableChain,
+    Tanh,
+    TanhLinearTails,
+    TransformerToBijection,
+    TriangularAffine,
+)
+from flowjax.transformers import (
     AffineTransformer,
     RationalQuadraticSplineTransformer,
 )
-import equinox as eqx
-
-from flowjax.bijections import (
-    Affine,
-    TriangularAffine,
-    Coupling,
-    MaskedAutoregressive,
-    Tanh,
-    Flip,
-    Permute,
-    BlockAutoregressiveNetwork,
-    TransformerToBijection,
-    AdditiveLinearCondition,
-    Partial,
-    EmbedCondition,
-)
-
 
 dim = 5
 cond_dim = 2
 key = random.PRNGKey(0)
 pos_def_triangles = jnp.full((dim, dim), 0.5) + jnp.diag(jnp.ones(dim))
+
+
+def get_maf_layer(key):
+    return MaskedAutoregressive(
+        key, AffineTransformer(), dim, cond_dim=cond_dim, nn_width=5, nn_depth=5
+    )
+
 
 bijections = {
     "Flip": Flip(),
@@ -39,6 +48,7 @@ bijections = {
     "Partial (slice)": Partial(Flip(), slice(1, 3)),
     "Affine": Affine(jnp.ones(dim), jnp.full(dim, 2)),
     "Tanh": Tanh(),
+    "TanhLinearTails": TanhLinearTails(1),
     "TriangularAffine (lower)": TriangularAffine(jnp.arange(dim), pos_def_triangles),
     "TriangularAffine (upper)": TriangularAffine(
         jnp.arange(dim), pos_def_triangles, lower=False
@@ -99,6 +109,10 @@ bijections = {
         BlockAutoregressiveNetwork(key, dim=dim, cond_dim=1, block_dim=3, depth=1),
         eqx.nn.MLP(2, 1, 3, 1, key=key),
         cond_dim,
+    ),
+    "Chain": Chain([Flip(), Affine(jnp.ones(dim), jnp.full(dim, 2))]),
+    "ScannableChain": ScannableChain(
+        eqx.filter_vmap(get_maf_layer)(random.split(key, 3))
     ),
 }
 

@@ -1,16 +1,17 @@
-from flowjax.distributions import Distribution, Transformed
-from flowjax.bijections import Invert, Bijection
+from typing import Dict, List, Optional, Sequence, Tuple
+
+import equinox as eqx
+import jax
+import jax.numpy as jnp
+import optax
+from equinox.custom_types import BoolAxisSpec
 from jax import random
 from jax.random import KeyArray
-import jax.numpy as jnp
-import equinox as eqx
-import optax
-from tqdm import tqdm
-from typing import Optional, List, Dict, Tuple, Sequence
-from flowjax.utils import Array
-from equinox.custom_types import BoolAxisSpec
 from jaxtyping import PyTree
-import jax
+from tqdm import tqdm
+
+from flowjax.distributions import Distribution
+from flowjax.utils import Array
 
 def train_flow(
     key: KeyArray,
@@ -30,7 +31,7 @@ def train_flow(
 
     Args:
         key (KeyArray): Jax PRNGKey.
-        dist (Distribution): Distribution object, trainable parameters are found using equinox.is_inexact_array.
+        dist (Distribution): Distribution object.
         x (Array): Samples from target distribution.
         condition (Optional[Array], optional): Conditioning variables. Defaults to None.
         max_epochs (int, optional): Maximum number of epochs. Defaults to 50.
@@ -98,7 +99,8 @@ def train_flow(
             best_params = eqx.filter(dist, eqx.is_inexact_array)
 
         elif count_fruitless(losses["val"]) > max_patience:
-            print("Max patience reached.")
+            if show_progress == True:
+                loop.set_postfix_str(f"{loop.postfix} (Max patience reached)")
             break
 
         if show_progress:

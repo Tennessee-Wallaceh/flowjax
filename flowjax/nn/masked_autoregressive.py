@@ -1,13 +1,14 @@
+from typing import Callable, List
+
+import jax.nn as jnn
+import jax.numpy as jnp
 from equinox import Module
 from equinox.nn import Linear
 from jax import random
-from typing import List, Callable
-import jax.numpy as jnp
-from flowjax.utils import Array
 from jax.random import KeyArray
-import jax.nn as jnn
-from flowjax.utils import _identity
+
 from flowjax.masks import rank_based_mask
+from flowjax.utils import Array, _identity
 
 
 class MaskedLinear(Module):
@@ -15,7 +16,8 @@ class MaskedLinear(Module):
     mask: Array
 
     def __init__(self, mask: Array, use_bias: bool = True, *, key: KeyArray):
-        """Masked linear layer.
+        """
+        Masked linear layer.
 
         Args:
             mask (Array): Mask with shape (out_features, in_features).
@@ -55,7 +57,7 @@ class AutoregressiveMLP(Module):
         *,
         key
     ) -> None:
-        """An autoregressive multilayer perceptron, similar to equinox.nn.composed.MLP.
+        """An autoregressive multilayer perceptron, similar to ``equinox.nn.composed.MLP``.
         Connections will only exist where in_ranks < out_ranks.
 
         Args:

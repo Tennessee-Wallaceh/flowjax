@@ -1,13 +1,18 @@
+from typing import Callable
+
+import equinox as eqx
 import jax.numpy as jnp
 from jax import random
-from jax.random import KeyArray
 from jax.nn.initializers import glorot_uniform
-from flowjax.utils import Array
-import equinox as eqx
-from typing import Callable
-import jax
-from flowjax.masks import block_diag_mask, block_tril_mask
+from jax.random import KeyArray
 
+from flowjax.masks import block_diag_mask, block_tril_mask
+from flowjax.utils import Array
+import jax
+
+def _tanh_log_grad(x):
+    "log gradient vector of tanh transformation"
+    return -2 * (x + jax.nn.softplus(-2 * x) - jnp.log(2.0))
 
 class BlockAutoregressiveLinear(eqx.Module):
     n_blocks: int
@@ -39,18 +44,21 @@ class BlockAutoregressiveLinear(eqx.Module):
             n_blocks (int): Number of diagonal blocks (dimension of original input).
             block_shape (tuple): The shape of the (unconstrained) blocks.
             cond_dim (int): Number of additional conditioning variables. Defaults to 0.
-            init (Callable, optional): Default initialisation method for the weight matrix. Defaults to glorot_uniform().
+            init (Callable, optional): Default initialisation method for the weight matrix. Defaults to ``glorot_uniform()``.
         """
         cond_size = (block_shape[0] * n_blocks, cond_dim)
 
         self.b_diag_mask = jnp.column_stack(
-            (jnp.zeros(cond_size, jnp.int32), block_diag_mask(block_shape, n_blocks))
+            (block_diag_mask(block_shape, n_blocks), jnp.zeros(cond_size, jnp.int32))
         )
 
         self.b_tril_mask = jnp.column_stack(
-            (jnp.ones(cond_size, jnp.int32), block_tril_mask(block_shape, n_blocks))
+            (block_tril_mask(block_shape, n_blocks), jnp.ones(cond_size, jnp.int32))
         )
-        self.b_diag_mask_idxs = jnp.where(self.b_diag_mask)
+
+        self.b_diag_mask_idxs = jnp.where(
+            self.b_diag_mask, size=block_shape[0] * block_shape[1] * n_blocks
+        )
 
         in_features, out_features = (
             block_shape[1] * n_blocks + cond_dim,
@@ -83,7 +91,33 @@ class BlockAutoregressiveLinear(eqx.Module):
         "returns output y, and components of weight matrix needed log_det component (n_blocks, block_shape[0], block_shape[1])"
         W = self.get_normalised_weights()
         if condition is not None:
-            x = jnp.concatenate((condition, x))
+            x = jnp.concatenate((x, condition))
         y = W @ x + self.bias
         jac_3d = W[self.b_diag_mask_idxs].reshape(self.n_blocks, *self.block_shape)
         return y, jnp.log(jac_3d)
+
+
+class BlockTanh:
+    """
+    Tanh transformation compatible with block neural autoregressive flow (log_abs_det provided as 3D array).
+    """
+
+    def __init__(self, n_blocks: int):
+        self.n_blocks = n_blocks
+
+    def __call__(self, x, condition=None):
+        """Applies the activation and computes the Jacobian. Jacobian shape is
+        (n_blocks, *block_size). Condition is ignored.
+
+        Returns:
+            Tuple: output, jacobian
+        """
+        log_det = _tanh_log_grad(x)
+        return jnp.tanh(x), _3d_log_det(log_det, self.n_blocks)
+
+
+def _3d_log_det(vals, n_blocks):
+    d = vals.shape[0] // n_blocks
+    log_det = jnp.full((n_blocks, d, d), -jnp.inf)
+    log_det = log_det.at[:, jnp.arange(d), jnp.arange(d)].set(vals.reshape(n_blocks, d))
+    return log_det

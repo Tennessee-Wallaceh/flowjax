@@ -1,17 +1,19 @@
-from flowjax.flows import (
-    coupling_flow,
-    block_neural_autoregressive_flow,
-    masked_autoregressive_flow,
-)
-from flowjax.bijections.transformers import (
+from typing import Any, Dict
+
+import jax.numpy as jnp
+import pytest
+from jax import random
+
+from flowjax.transformers import (
     AffineTransformer,
     RationalQuadraticSplineTransformer,
 )
 from flowjax.distributions import StandardNormal
-import jax.numpy as jnp
-from jax import random
-import pytest
-from typing import Dict, Any
+from flowjax.flows import (
+    BlockNeuralAutoregressiveFlow,
+    CouplingFlow,
+    MaskedAutoregressiveFlow,
+)
 
 dim = 3
 common_kwargs = {
@@ -26,22 +28,22 @@ testcases = [
     # (name, type, kwargs)}
     (
         "Affine_Coupling",
-        coupling_flow,
+        CouplingFlow,
         {"transformer": AffineTransformer()} | common_kwargs,
     ),
     (
         "RationalQuadraticSpline_Coupling",
-        coupling_flow,
+        CouplingFlow,
         {"transformer": RationalQuadraticSplineTransformer(5, 3)} | common_kwargs,
     ),
     (
         "BNAF",
-        block_neural_autoregressive_flow,
+        BlockNeuralAutoregressiveFlow,
         {"key": random.PRNGKey(0), "base_dist": StandardNormal(dim), "flow_layers": 2},
     ),
     (
         "Affine_MaskedAutoregessive",
-        masked_autoregressive_flow,
+        MaskedAutoregressiveFlow,
         {"transformer": AffineTransformer()} | common_kwargs,
     ),
 ]

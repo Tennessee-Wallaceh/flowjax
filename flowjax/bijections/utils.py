@@ -1,8 +1,12 @@
-from flowjax.bijections import Bijection, Transformer
-import jax.numpy as jnp
-from flowjax.utils import Array
-from typing import Sequence, Tuple, Union
+from typing import Union
+
 import equinox as eqx
+import jax.numpy as jnp
+from jax.experimental import checkify
+
+from flowjax.bijections import Bijection
+from flowjax.transformers import Transformer
+from flowjax.utils import Array
 
 
 class Invert(Bijection):
@@ -34,62 +38,6 @@ class Invert(Bijection):
         return self.bijection.transform_and_log_abs_det_jacobian(y, condition)
 
 
-class Chain(Bijection):
-    bijections: Tuple[Bijection]
-    cond_dim: int
-
-    def __init__(self, bijections: Sequence[Bijection]):
-        """Chain together bijections to form another bijection.
-
-        Args:
-            bijections (Sequence[Bijection]): Sequence of bijections.
-        """
-        self.bijections = tuple(bijections)
-        self.cond_dim = max([b.cond_dim for b in bijections])
-
-    def transform(self, x, condition=None):
-        for bijection in self.bijections:
-            x = bijection.transform(x, condition)
-        return x
-
-    def transform_and_log_abs_det_jacobian(self, x, condition=None):
-        log_abs_det_jac = 0
-        for bijection in self.bijections:
-            x, log_abs_det_jac_i = bijection.transform_and_log_abs_det_jacobian(
-                x, condition
-            )
-            log_abs_det_jac += log_abs_det_jac_i
-        return x, log_abs_det_jac
-
-    def inverse(self, y: Array, condition=None):
-        for bijection in reversed(self.bijections):
-            y = bijection.inverse(y, condition)
-        return y
-
-    def inverse_and_log_abs_det_jacobian(self, y, condition=None):
-        log_abs_det_jac = 0
-        for bijection in reversed(self.bijections):
-            y, log_abs_det_jac_i = bijection.inverse_and_log_abs_det_jacobian(
-                y, condition
-            )
-            log_abs_det_jac += log_abs_det_jac_i
-        return y, log_abs_det_jac
-
-    def __getitem__(self, i: Union[int, slice]) -> Bijection:
-        if isinstance(i, int):
-            return self.bijections[i]
-        elif isinstance(i, slice):
-            return Chain(self.bijections[i])
-        else:
-            raise TypeError(f"Indexing with type {type(i)} is not supported.")
-
-    def __iter__(self):
-        yield from self.bijections
-
-    def __len__(self):
-        return len(self.bijections)
-
-
 class Permute(Bijection):
     permutation: Array
     inverse_permutation: Array
@@ -101,8 +49,10 @@ class Permute(Bijection):
         Args:
             permutation (Array): Indexes 0-(dim-1) representing new order.
         """
-        if not (permutation.sort() == jnp.arange(len(permutation))).all():
-            raise ValueError("Invalid permutation array provided.")
+        checkify.check(
+            (permutation.sort() == jnp.arange(len(permutation))).all(),
+            "Invalid permutation array provided.",
+        )
         self.permutation = permutation
         self.inverse_permutation = jnp.argsort(permutation)
         self.cond_dim = 0
@@ -229,8 +179,8 @@ class EmbedCondition(Bijection):
         The returned bijection has cond_dim equal to the raw condition size.
 
         Args:
-            bijection (Bijection): Bijection with bijection.cond_dim equal to the embedded size.
-            embedding_net (eqx.Module): A callable equinox module that embeds a conditioning variable to size bijection.cond_dim.
+            bijection (Bijection): Bijection with ``bijection.cond_dim`` equal to the embedded size.
+            embedding_net (eqx.Module): A callable equinox module that embeds a conditioning variable to size ``bijection.cond_dim``.
             cond_dim (int): The dimension of the raw conditioning variable.
         """
         self.bijection = bijection

@@ -1,14 +1,18 @@
 # Distribution object (for flows and base distributions)
 
 from abc import ABC, abstractmethod
-from typing import Optional
-from flowjax.bijections import Bijection, Affine
-from jax import random
-from jax.scipy import stats as jstats
+from typing import Any, Optional
+
+import equinox as eqx
 import jax
 import jax.numpy as jnp
+from jax import random
 from jax.random import KeyArray
+from jax.scipy import stats as jstats
+
+from flowjax.bijections import Affine, Bijection
 from flowjax.utils import Array, broadcast_arrays_1d
+<<<<<<< HEAD
 from typing import Any
 import equinox as eqx
 from jax.scipy.special import ndtri, gammainc
@@ -19,6 +23,8 @@ from jax.scipy.stats import beta
 # Tensorflow probability substrates
 import tensorflow_probability as tfp
 tquantile = tfp.substrates.jax.distributions.student_t.quantile
+=======
+>>>>>>> 8d7d0230bb4a876f198cf6a5ac94492b590020cf
 
 # To construct a distribution, we define _log_prob and _sample, which take in vector arguments.
 # More friendly methods are then created from these, supporting batches of inputs.
@@ -53,14 +59,13 @@ class Distribution(eqx.Module, ABC):
         condition: Optional[Array] = None,
         n: Optional[int] = None,
     ) -> Array:
-        """Sample from a distribution. The condition can be a vector, or a matrix.
-        - If condition.ndim==1, n allows repeated sampling (a single sample is drawn if n is not provided).
-        - If condition.ndim==2, axis 0 is treated as batch dimension, (one sample is drawn for each row).
+        """Sample from a distribution.
 
         Args:
             key (KeyArray): Jax PRNGKey.
-            condition (Optional[Array], optional): Conditioning variables. Defaults to None.
-            n (Optional[int], optional): Number of samples (if condition.ndim==1). Defaults to None.
+            condition (Optional[Array], optional): Conditioning variables. If the conditioning variable has
+                a leading batch dimension, `n` is inferred from the leading axis. Defaults to None.
+            n (Optional[int], optional): Number of samples. Defaults to None.
 
         Returns:
             Array: Jax array of samples.
@@ -141,8 +146,22 @@ class Transformed(Distribution):
     bijection: Bijection
     dim: int
     cond_dim: int
+<<<<<<< HEAD
     def __init__( self, base_dist: Distribution, bijection: Bijection):
         """
+=======
+
+    def __init__(
+        self,
+        base_dist: Distribution,
+        bijection: Bijection,
+    ):
+        """
+        Form a distribution like object using a base distribution and a
+        bijection. We take the forward bijection for use in sampling, and the inverse
+        bijection for use in density evaluation.
+
+>>>>>>> 8d7d0230bb4a876f198cf6a5ac94492b590020cf
         Args:
             base_dist (Distribution): Base distribution.
             bijection (Bijection): Bijection to transform distribution.
@@ -169,12 +188,11 @@ class Transformed(Distribution):
 
 
 class StandardNormal(Distribution):
-    """
-    Implements a standard normal distribution, condition is ignored.
-    """
 
     def __init__(self, dim: int):
         """
+        Implements a standard normal distribution, condition is ignored.
+
         Args:
             dim (int): Dimension of the normal distribution.
         """
@@ -276,12 +294,11 @@ class Uniform(Transformed):
 
 
 class _StandardGumbel(Distribution):
-    """
-    Implements standard gumbel distribution (loc=0, scale=1)
-    Ref: https://en.wikipedia.org/wiki/Gumbel_distribution
+    """Standard gumbel distribution (https://en.wikipedia.org/wiki/Gumbel_distribution).
     """
 
     def __init__(self, dim):
+        
         self.dim = dim
         self.cond_dim = 0
 
@@ -299,12 +316,16 @@ class _StandardGumbel(Distribution):
 
 
 class Gumbel(Transformed):
-    """
-    Gumbel distribution. `loc` and `scale` should be broadcastable.
-    Ref: https://en.wikipedia.org/wiki/Gumbel_distribution
-    """
+    """Gumbel distribution (https://en.wikipedia.org/wiki/Gumbel_distribution)"""
 
     def __init__(self, loc: Array, scale: Array = 1.0):
+        """
+        `loc` and `scale` should broadcast to the dimension of the distribution.
+
+        Args:
+            loc (Array): Location paramter. 
+            scale (Array, optional): Scale parameter. Defaults to 1.0.
+        """
         loc, scale = broadcast_arrays_1d(loc, scale)
         base_dist = _StandardGumbel(loc.shape[0])
         bijection = Affine(loc, scale)
@@ -343,10 +364,16 @@ class _StandardCauchy(Distribution):
 
 class Cauchy(Transformed):
     """
-    Cauchy distribution. `loc` and `scale` should be broadcastable.
-    Ref: https://en.wikipedia.org/wiki/Cauchy_distribution
+    Cauchy distribution (https://en.wikipedia.org/wiki/Cauchy_distribution).
     """
     def __init__(self, loc: Array, scale: Array = 1.0):
+        """
+        `loc` and `scale` should broadcast to the dimension of the distribution.
+
+        Args:
+            loc (Array): Location paramter. 
+            scale (Array, optional): Scale parameter. Defaults to 1.0.
+        """
         loc, scale = broadcast_arrays_1d(loc, scale)
         base_dist = _StandardCauchy(loc.shape[0])
         bijection = Affine(loc, scale)
@@ -383,8 +410,22 @@ class _StandardStudentT(Distribution):
 
 
 class StudentT(Transformed):
+<<<<<<< HEAD
     "Student T distribution. `loc` and `scale` should be broadcastable."
     def __init__(self, df: Array, loc: Array, scale: Array = 1.0):
+=======
+    """Student T distribution (https://en.wikipedia.org/wiki/Student%27s_t-distribution)."""
+
+    def __init__(self, df: Array, loc: Array = 0.0, scale: Array = 1.0):
+        """
+        `df`, `loc` and `scale` broadcast to the dimension of the distribution.
+
+        Args:
+            df (Array): The degrees of freedom.
+            loc (Array): Location parameter. Defaults to 0.0.
+            scale (Array, optional): Scale parameter. Defaults to 1.0.
+        """
+>>>>>>> 8d7d0230bb4a876f198cf6a5ac94492b590020cf
         df, loc, scale = broadcast_arrays_1d(df, loc, scale)
         self.dim = df.shape[0]
         self.cond_dim = 0

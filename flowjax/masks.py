@@ -1,11 +1,12 @@
 """
 Various masks, generally used in flows to enforce e.g. a dependency structure
-that leads to efficient Jacobian determinant calculations.
+that leads to invertibility and efficient Jacobian determinant calculations.
 """
 
-from flowjax.utils import Array
 import jax.numpy as jnp
 from jax.scipy.linalg import block_diag
+
+from flowjax.utils import Array
 
 
 def rank_based_mask(in_ranks: Array, out_ranks: Array, eq: bool = False):
@@ -30,7 +31,7 @@ def rank_based_mask(in_ranks: Array, out_ranks: Array, eq: bool = False):
 
 def block_diag_mask(block_shape: tuple, n_blocks: int):
     "Block diagonal mask."
-    return block_diag(*[jnp.ones(block_shape, jnp.int32) for _ in range(n_blocks)])
+    return block_diag(*jnp.ones((n_blocks, *block_shape), jnp.int32))
 
 
 def block_tril_mask(block_shape: tuple, n_blocks: int):

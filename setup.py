@@ -2,8 +2,7 @@ import io
 import os
 import re
 
-from setuptools import find_packages
-from setuptools import setup
+from setuptools import find_packages, setup
 
 
 def read(filename):
@@ -15,7 +14,7 @@ def read(filename):
 
 setup(
     name="flowjax",
-    version="5.0.0",
+    version="6.1.0",
     url="https://github.com/danielward27/flowjax.git",
     license="MIT",
     author="Daniel Ward",
@@ -31,15 +30,14 @@ setup(
         "tqdm",
         "optax",
         "jaxtyping",
-        "numpy<=1.22.4",  # https://github.com/google/jax/issues/11241
     ],
+    python_requires=">=3.7",
     extras_require={"dev": ["pytest"]},
     classifiers=[
         "Development Status :: 2 - Pre-Alpha",
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.8",
-        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
     ],
 )
