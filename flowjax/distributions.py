@@ -2,13 +2,13 @@
 
 from abc import ABC, abstractmethod
 from typing import Optional
-from flowjax.bijections.abc import Bijection
+from flowjax.bijections import Bijection, Affine
 from jax import random
 from jax.scipy import stats as jstats
 import jax
 import jax.numpy as jnp
 from jax.random import KeyArray
-from flowjax.utils import Array
+from flowjax.utils import Array, broadcast_arrays_1d
 from typing import Any
 import equinox as eqx
 from jax.scipy.special import ndtri, gammainc
@@ -48,7 +48,10 @@ class Distribution(eqx.Module, ABC):
         return True if self.cond_dim > 0 else False
 
     def sample(
-        self, key: KeyArray, condition: Optional[Array] = None, n: Optional[int] = None,
+        self,
+        key: KeyArray,
+        condition: Optional[Array] = None,
+        n: Optional[int] = None,
     ) -> Array:
         """Sample from a distribution. The condition can be a vector, or a matrix.
         - If condition.ndim==1, n allows repeated sampling (a single sample is drawn if n is not provided).
@@ -76,7 +79,7 @@ class Distribution(eqx.Module, ABC):
             if condition is not None and condition.ndim != 1:
                 raise ValueError("condition must be 1d if n is provided.")
             in_axes = (0, None)
-            
+
         keys = random.split(key, n)
         return jax.vmap(self._sample, in_axes)(keys, condition)
 
@@ -110,18 +113,18 @@ class Distribution(eqx.Module, ABC):
         raise NotImplementedError
 
     def _argcheck_x(self, x: Array):
-        if x.ndim not in (1,2):
+        if x.ndim not in (1, 2):
             raise ValueError("x.ndim should be 1 or 2")
 
         if x.shape[-1] != self.dim:
-            raise ValueError(f"Expected x.shape[-1]=={self.dim}.")
+            raise ValueError(f"Expected x.shape[-1]=={self.dim}, got {x.shape}.")
 
     def _argcheck_condition(self, condition: Optional[Array] = None):
         if condition is None:
             if self.conditional:
                 raise ValueError(f"condition must be provided.")
         else:
-            if condition.ndim not in (1,2):
+            if condition.ndim not in (1, 2):
                 raise ValueError("condition.ndim should be 1 or 2")
             if condition.shape[-1] != self.cond_dim:
                 raise ValueError(f"Expected condition.shape[-1]=={self.cond_dim}.")
@@ -142,7 +145,7 @@ class Transformed(Distribution):
         """
         Args:
             base_dist (Distribution): Base distribution.
-            bijection (Bijection): Bijection defined in "normalising" direction.
+            bijection (Bijection): Bijection to transform distribution.
         """
         self.base_dist = base_dist
         self.bijection = bijection
@@ -155,6 +158,7 @@ class Transformed(Distribution):
         return p_z + log_abs_det
 
     def _sample(self, key: KeyArray, condition: Optional[Array] = None):
+        assert x.shape == (self.dim,)
         z = self.base_dist._sample(key, condition)
         x = self.bijection.transform(z, condition)
         return x
@@ -168,6 +172,7 @@ class StandardNormal(Distribution):
     """
     Implements a standard normal distribution, condition is ignored.
     """
+
     def __init__(self, dim: int):
         """
         Args:
@@ -177,7 +182,6 @@ class StandardNormal(Distribution):
         self.cond_dim = 0
 
     def _log_prob(self, x: Array, condition: Optional[Array] = None):
-        assert x.shape == (self.dim,)
         return jnp.clip(
             jstats.norm.logpdf(x).sum(),
             a_min=jnp.log(1e-37)
@@ -193,30 +197,46 @@ class StandardNormal(Distribution):
         return ndtri(u)
 
 
-class Normal(Distribution):
+class Normal(Transformed):
     """
-    Implements a normal distribution with mean and std.
+    Implements an independent Normal distribution with mean and std for
+    each dimension. `loc` and `scale` should be broadcastable.
     """
-    mean: float
-    std: float
-    def __init__(self, dim: int, mean: float=0.0, std: float=1.0):
+
+    def __init__(self, loc: Array, scale: Array = 1.0):
         """
         Args:
-            dim (int): Dimension of the normal distribution.
+            loc (Array): Array of the means of each dimension.
+            scale (Array): Array of the standard deviations of each dimension.
         """
+        loc, scale = broadcast_arrays_1d(loc, scale)
+        base_dist = StandardNormal(loc.shape[0])
+        bijection = Affine(loc=loc, scale=scale)
+        super().__init__(base_dist, bijection)
+
+    @property
+    def loc(self):
+        return self.bijection.loc
+
+    @property
+    def scale(self):
+        return self.bijection.scale
+
+
+class _StandardUniform(Distribution):
+    """
+    Implements a standard independent Uniform distribution, ie X ~ Uniform([0, 1]^dim).
+    """
+
+    def __init__(self, dim):
         self.dim = dim
         self.cond_dim = 0
-        self.mean = mean
-        self.std = std
 
     def _log_prob(self, x: Array, condition: Optional[Array] = None):
-        assert x.shape == (self.dim,)
-        std_x = (x - self.mean) / self.std
-        return jstats.norm.logpdf(std_x).sum()
+        return jstats.uniform.logpdf(x).sum()
 
     def _sample(self, key: KeyArray, condition: Optional[Array] = None):
-        std_x = random.normal(key, (self.dim,))
-        return self.std * std_x + self.mean
+        return random.uniform(key, shape=(self.dim,))
 
     def __repr__(self):
         return f'<FJ N({self.mean}, {self.std})>'
@@ -224,53 +244,48 @@ class Normal(Distribution):
     def quantile(self, u):
         return ndtri(u)
 
-class Uniform(Distribution):
+class Uniform(Transformed):
     """
-    Implements a Uniform distribution defined over a min and max val.
-    X ~ Uniform([min, max])
+    Implements an independent uniform distribution
+    between min and max for each dimension. `minval` and `maxval` should be broadcastable.
     """
-    min: float
-    max: float
-    def __init__(self, dim, min=0.0, max=1.0):
+
+    def __init__(self, minval: Array, maxval: Array):
         """
         Args:
-            min (float): 
-            max (float): 
+            minval (Array): ith entry gives the min of the ith dimension
+            maxval (Array): ith entry gives the max of the ith dimension
         """
-        self.dim = dim
-        self.cond_dim = 0
-        self.min = min
-        self.max = max
+        minval, maxval = broadcast_arrays_1d(minval, maxval)
+        if jnp.any(maxval < minval):
+            raise ValueError("Minimums must be less than maximums.")
+        base_dist = _StandardUniform(minval.shape[0])
+        bijection = Affine(loc=minval, scale=maxval - minval)
+        super().__init__(base_dist, bijection)
 
-    def _log_prob(self, x: Array, condition: Optional[Array] = None):
-        assert x.shape == (self.dim,)
-        return jstats.uniform.logpdf(
-            x, loc=self.min, scale=self.max - self.min
-        ).sum()
+    @property
+    def minval(self):
+        return self.bijection.loc
 
-    def _sample(self, key: KeyArray, condition: Optional[Array] = None):
-        return random.uniform(
-            key, shape=(self.dim,), minval=self.min, maxval=self.max
-        )
-
-    def __repr__(self):
-        return f'<FlowJax Uniform([{self.min}, {self.max})>'
+    @property
+    def maxval(self):
+        return self.bijection.loc + self.bijection.scale
 
     def quantile(self, u):
         return (u  * (self.max - self.min)) + self.min
 
 
-class Gumbel(Distribution):
+class _StandardGumbel(Distribution):
     """
     Implements standard gumbel distribution (loc=0, scale=1)
     Ref: https://en.wikipedia.org/wiki/Gumbel_distribution
     """
+
     def __init__(self, dim):
         self.dim = dim
         self.cond_dim = 0
 
     def _log_prob(self, x: Array, condition: Optional[Array] = None):
-        assert x.shape == (self.dim,)
         return -(x + jnp.exp(-x)).sum()
 
     def _sample(self, key: KeyArray, condition: Optional[Array] = None):
@@ -282,8 +297,29 @@ class Gumbel(Distribution):
     def quantile(self, u):
         raise NotImplementedError
 
-   
-class Cauchy(Distribution):
+
+class Gumbel(Transformed):
+    """
+    Gumbel distribution. `loc` and `scale` should be broadcastable.
+    Ref: https://en.wikipedia.org/wiki/Gumbel_distribution
+    """
+
+    def __init__(self, loc: Array, scale: Array = 1.0):
+        loc, scale = broadcast_arrays_1d(loc, scale)
+        base_dist = _StandardGumbel(loc.shape[0])
+        bijection = Affine(loc, scale)
+        super().__init__(base_dist, bijection)
+
+    @property
+    def loc(self):
+        return self.bijection.loc
+
+    @property
+    def scale(self):
+        return self.bijection.scale
+
+
+class _StandardCauchy(Distribution):
     """
     Implements standard cauchy distribution (loc=0, scale=1)
     Ref: https://en.wikipedia.org/wiki/Cauchy_distribution
@@ -293,7 +329,6 @@ class Cauchy(Distribution):
         self.cond_dim = 0
 
     def _log_prob(self, x: Array, condition: Optional[Array] = None):
-        assert x.shape == (self.dim,)
         return jstats.cauchy.logpdf(x).sum()
 
     def _sample(self, key: KeyArray, condition: Optional[Array] = None):
@@ -306,37 +341,69 @@ class Cauchy(Distribution):
         return jnp.tan(jnp.pi  * (u - 0.5))
 
 
-class StudentT(Distribution):
+class Cauchy(Transformed):
     """
-    Implements student T distribution with specified degree of freedom.
+    Cauchy distribution. `loc` and `scale` should be broadcastable.
+    Ref: https://en.wikipedia.org/wiki/Cauchy_distribution
     """
-    unc_df: Array
-    def __init__(self, dim, df=30.):
-        self.dim = dim
+    def __init__(self, loc: Array, scale: Array = 1.0):
+        loc, scale = broadcast_arrays_1d(loc, scale)
+        base_dist = _StandardCauchy(loc.shape[0])
+        bijection = Affine(loc, scale)
+        super().__init__(base_dist, bijection)
+
+    @property
+    def loc(self):
+        return self.bijection.loc
+
+    @property
+    def scale(self):
+        return self.bijection.scale
+
+
+class _StandardStudentT(Distribution):
+    """
+    Implements student T distribution with specified degrees of freedom.
+    """
+    log_df: Array
+    def __init__(self, df: Array):
+        self.dim = df.shape[0]
         self.cond_dim = 0
-        self.unc_df = jnp.log(jnp.array([df]))
+        self.log_df = jnp.log(df)
 
     def _log_prob(self, x: Array, condition: Optional[Array] = None):
-        assert x.shape == (self.dim,)
-        # return jstats.t.logpdf(x, df=self.df).sum()
-        return jnp.clip(
-            jstats.t.logpdf(x, df=jnp.exp(self.unc_df)).sum(),
-            a_min=jnp.log(1e-37)
-        )
+        return jstats.t.logpdf(x, df=self.df).sum()
 
     def _sample(self, key: KeyArray, condition: Optional[Array] = None):
-        return random.t(key, df=jnp.exp(self.unc_df), shape=(self.dim,))
+        return random.t(key, df=self.df, shape=(self.dim,))
 
-    def __repr__(self):
-        return f'<FJ StudentT(df={jnp.exp(self.unc_df).item():.2f})>'
+    @property
+    def df(self):
+        return jnp.exp(self.log_df)
 
-    def quantile(self, u):
-        return tquantile(
-            u, 
-            jnp.exp(self.unc_df),
-            jnp.array([0.0]),
-            jnp.array([1.0])
-        )
+
+class StudentT(Transformed):
+    "Student T distribution. `loc` and `scale` should be broadcastable."
+    def __init__(self, df: Array, loc: Array, scale: Array = 1.0):
+        df, loc, scale = broadcast_arrays_1d(df, loc, scale)
+        self.dim = df.shape[0]
+        self.cond_dim = 0
+        base_dist = _StandardStudentT(df)
+        bijection = Affine(loc, scale)
+        super().__init__(base_dist, bijection)
+
+    @property
+    def loc(self):
+        return self.bijection.loc
+
+    @property
+    def scale(self):
+        return self.bijection.scale
+
+    @property
+    def df(self):
+        return self.base_dist.df
+
 
 class TwoSidedGPD(Distribution):
     neg_tail: float

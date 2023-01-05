@@ -1,9 +1,8 @@
-from flowjax.bijections.abc import Bijection
+from flowjax.bijections import Bijection, Transformer
 import jax.numpy as jnp
-from jax import random
-from jax.random import KeyArray
 from flowjax.utils import Array
-from typing import List, Sequence, Tuple, Union
+from typing import Sequence, Tuple, Union
+import equinox as eqx
 
 
 class Invert(Bijection):
@@ -22,16 +21,16 @@ class Invert(Bijection):
         self.bijection = bijection
         self.cond_dim = bijection.cond_dim
 
-    def transform(self, x, condition = None):
+    def transform(self, x, condition=None):
         return self.bijection.inverse(x, condition)
 
-    def transform_and_log_abs_det_jacobian(self, x, condition = None):
+    def transform_and_log_abs_det_jacobian(self, x, condition=None):
         return self.bijection.inverse_and_log_abs_det_jacobian(x, condition)
 
-    def inverse(self, y, condition = None):
+    def inverse(self, y, condition=None):
         return self.bijection.transform(y, condition)
 
-    def inverse_and_log_abs_det_jacobian(self, y, condition = None):
+    def inverse_and_log_abs_det_jacobian(self, y, condition=None):
         return self.bijection.transform_and_log_abs_det_jacobian(y, condition)
 
 
@@ -139,42 +138,117 @@ class Flip(Bijection):
         return jnp.flip(y), jnp.array(0)
 
 
-def intertwine_flip(bijections: Sequence[Bijection]) -> List[Bijection]:
-    """Given a sequence of bijections, add 'flips' between layers, i.e.
-    with bijections [a,b,c], returns [a, flip, b, flip, c].
+class TransformerToBijection(Bijection):
+    cond_dim: int = 0
+    params: Array
+    transformer: Transformer
 
-    Args:
-        bijections (Sequence[Bijection]): Sequence of bijections.
+    def __init__(self, transformer: Transformer, *, params: Array):
+        """Convert Transformer object to Bijection object.
 
-    Returns:
-        List[Bijection]: List of bijections with flips inbetween.
-    """
-    new_bijections = []
-    for b in bijections[:-1]:
-        new_bijections.extend([b, Flip()])
-    new_bijections.append(bijections[-1])
-    return new_bijections
+        Args:
+            transformer (Transformer): Transformer.
+            params (Array): Unconstrained parameter vector from which the args can be constructed, using `transformer.get_args(params)`.
+        """
+        # Note, params is key word only, as perhaps we will want to support
+        # construction from args too, although this is not implemented yet.
+        self.params = params
+        self.transformer = transformer
+
+    def transform(self, x: Array, condition=None):
+        args = self.transformer.get_args(self.params)
+        return self.transformer.transform(x, *args)
+
+    def transform_and_log_abs_det_jacobian(self, x: Array, condition=None):
+        args = self.transformer.get_args(self.params)
+        return self.transformer.transform_and_log_abs_det_jacobian(x, *args)
+
+    def inverse(self, y: Array, condition=None):
+        args = self.transformer.get_args(self.params)
+        return self.transformer.inverse(y, *args)
+
+    def inverse_and_log_abs_det_jacobian(self, y: Array, condition=None):
+        args = self.transformer.get_args(self.params)
+        return self.transformer.inverse_and_log_abs_det_jacobian(y, *args)
 
 
-def intertwine_random_permutation(
-    key: KeyArray, bijections: Sequence[Bijection], dim: int
-) -> List[Bijection]:
-    """Given a list of bijections, add random permutations between layers. i.e.
-    with bijections [a,b,c], returns [a, perm1, b, perm2, c].
+class Partial(Bijection):
+    """Applies bijection to specific indices of an input."""
 
-    Args:
-        key (KeyArray): Jax PRNGKey
-        bijections (Sequence[Bijection]): Sequence of bijections.
-        dim (int): Dimension.
+    cond_dim: int
+    bijection: Array
+    idxs: Union[int, slice, Array]
 
-    Returns:
-        List[Bijection]: List of bijections with random permutations inbetween.
-    """
-    new_bijections = []
-    for bijection in bijections[:-1]:
-        key, subkey = random.split(key)
-        perm = random.permutation(subkey, jnp.arange(dim))
-        new_bijections.extend([bijection, Permute(perm)])
-        
-    new_bijections.append(bijections[-1])
-    return new_bijections
+    def __init__(self, bijection: Bijection, idxs):
+        """
+        Args:
+            bijection (Bijection): Bijection that is compatible with the subset of x indexed by idxs.
+            idxs: Indices (Integer, a slice, or an ndarray with integer/bool dtype) of the transformed portion. If a multidimensional array is provided, the array is flattened.
+        """
+        self.bijection = bijection
+        self.cond_dim = self.bijection.cond_dim
+
+        if not isinstance(idxs, slice):
+            idxs = jnp.array(idxs).ravel()
+
+            if jnp.issubdtype(idxs, jnp.integer):
+                idxs = jnp.unique(idxs)
+
+        self.idxs = idxs
+
+    def transform(self, x: Array, condition=None):
+        y = self.bijection.transform(x[self.idxs], condition)
+        return x.at[self.idxs].set(y)
+
+    def transform_and_log_abs_det_jacobian(self, x: Array, condition=None):
+        y, log_det = self.bijection.transform_and_log_abs_det_jacobian(
+            x[self.idxs], condition
+        )
+        return x.at[self.idxs].set(y), log_det
+
+    def inverse(self, y: Array, condition=None) -> Array:
+        x = self.bijection.inverse(y[self.idxs], condition)
+        return y.at[self.idxs].set(x)
+
+    def inverse_and_log_abs_det_jacobian(self, y: Array, condition=None) -> Array:
+        x, log_det = self.bijection.inverse_and_log_abs_det_jacobian(
+            y[self.idxs], condition
+        )
+        return y.at[self.idxs].set(x), log_det
+
+
+class EmbedCondition(Bijection):
+    bijection: Bijection
+    embedding_net: eqx.Module
+    cond_dim: int
+
+    def __init__(
+        self, bijection: Bijection, embedding_net: eqx.Module, cond_dim: int
+    ) -> None:
+        """Use an embedding network to reduce the dimensionality of the conditioning variable.
+        The returned bijection has cond_dim equal to the raw condition size.
+
+        Args:
+            bijection (Bijection): Bijection with bijection.cond_dim equal to the embedded size.
+            embedding_net (eqx.Module): A callable equinox module that embeds a conditioning variable to size bijection.cond_dim.
+            cond_dim (int): The dimension of the raw conditioning variable.
+        """
+        self.bijection = bijection
+        self.embedding_net = embedding_net
+        self.cond_dim = cond_dim
+
+    def transform(self, x, condition=None):
+        condition = self.embedding_net(condition)
+        return self.bijection.transform(x, condition)
+
+    def transform_and_log_abs_det_jacobian(self, x, condition=None):
+        condition = self.embedding_net(condition)
+        return self.bijection.transform_and_log_abs_det_jacobian(x, condition)
+
+    def inverse(self, y, condition=None):
+        condition = self.embedding_net(condition)
+        return self.bijection.inverse(y, condition)
+
+    def inverse_and_log_abs_det_jacobian(self, y, condition=None):
+        condition = self.embedding_net(condition)
+        return self.bijection.inverse_and_log_abs_det_jacobian(y, condition)
