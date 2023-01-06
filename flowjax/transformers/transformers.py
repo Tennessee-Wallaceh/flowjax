@@ -11,47 +11,8 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
-from flowjax.utils import Array
-from typing import List
-from abc import ABC, abstractmethod
-
-from equinox import Module
-
-from flowjax.utils import Array, real_to_increasing_on_interval
-
-
-
-class Transformer(ABC, Module):
-    """Bijection which facilitates parameterisation with a neural network output
-    (e.g. as in coupling flows, or masked autoressive flows). Should not contain
-    (directly) trainable parameters."""
-
-    @abstractmethod
-    def transform(self, x: Array, *args: Array) -> Array:
-        """Apply transformation."""
-
-    @abstractmethod
-    def transform_and_log_abs_det_jacobian(self, x: Array, *args: Array) -> tuple:
-        """Apply transformation and compute log absolute value of the Jacobian determinant."""
-
-    @abstractmethod
-    def inverse(self, y: Array, *args: Array) -> Array:
-        """Invert the transformation."""
-
-    def inverse_and_log_abs_det_jacobian(self, x: Array, *args: Array) -> tuple:
-        """Invert the transformation and compute the log absolute value of the Jacobian determinant."""
-
-    @abstractmethod
-    def num_params(self, dim: int) -> int:
-        "Total number of parameters required for bijection."
-
-    @abstractmethod
-    def get_ranks(self, dim: int) -> Array:
-        "The ranks of the parameters, i.e. which dimension of the input the parameters correspond to."
-
-    @abstractmethod
-    def get_args(self, params: Array) -> List[Array]:
-        "Transform unconstrained vector of params (e.g. nn output) into args for transformation."
+from flowjax.transformers.abc import Transformer
+from flowjax.utils import real_to_increasing_on_interval
 
 
 class AffineTransformer(Transformer):
@@ -80,14 +41,27 @@ class AffineTransformer(Transformer):
         return loc, jnp.exp(log_scale)
 
 
+class ScaleTransformer(AffineTransformer):
+    "A Scale transformer is the same as an Affine transformer with a zero location."
+    def num_params(self, dim):
+        return dim
+
+    def get_ranks(self, dim):
+        return jnp.tile(jnp.arange(dim), 1)
+
+    def get_args(self, params):
+        return jnp.zeros_like(params), jnp.exp(params)
+
+
 class RationalQuadraticSplineTransformer(Transformer):
     """RationalQuadraticSplineTransformer (https://arxiv.org/abs/1906.04032)."""
     K: int
     B: int
     softmax_adjust: float
     min_derivative: float
+    left_trainable: bool
 
-    def __init__(self, K, B, softmax_adjust=1e-2, min_derivative=1e-3):
+    def __init__(self, K, B, softmax_adjust=1e-2, min_derivative=1e-3, left_trainable=False):
         """
         Each row of parameter matrices (x_pos, y_pos, derivatives) corresponds to a column in x.
         Ouside the interval [-B, B], the identity transform is used. 
@@ -102,6 +76,7 @@ class RationalQuadraticSplineTransformer(Transformer):
         self.B = B
         self.softmax_adjust = softmax_adjust
         self.min_derivative = min_derivative
+        self.left_trainable = left_trainable
 
     @partial(jax.vmap, in_axes=[None, 0, 0, 0, 0])
     def transform(self, x, x_pos, y_pos, derivatives):
@@ -137,14 +112,20 @@ class RationalQuadraticSplineTransformer(Transformer):
         derivative = self.derivative(x, x_pos, y_pos, derivatives)
         return x, -jnp.log(derivative).sum()
 
+    def _params_per_dim(self):
+        num_params = (self.K * 3 - 1)
+        if self.left_trainable:
+            num_params += 1 # extra parameter for left derivative
+        return num_params
+
     def num_params(self, dim: int):
-        return (self.K * 3 - 1) * dim
+        return self._params_per_dim() * dim
 
     def get_ranks(self, dim: int):
-        return jnp.repeat(jnp.arange(dim), self.K * 3 - 1)
+        return jnp.repeat(jnp.arange(dim), self._params_per_dim())
 
     def get_args(self, params):
-        params = params.reshape((-1, self.K * 3 - 1))
+        params = params.reshape((-1, self._params_per_dim()))
         return jax.vmap(self._get_args)(params)
 
     def _get_args(self, params):
@@ -161,7 +142,11 @@ class RationalQuadraticSplineTransformer(Transformer):
         pos_pad = jnp.array([self.B, 1e4 * self.B])
         x_pos = jnp.hstack((-jnp.flip(pos_pad), x_pos, pos_pad))
         y_pos = jnp.hstack((-jnp.flip(pos_pad), y_pos, pos_pad))
-        derivatives = jnp.pad(derivatives, 2, constant_values=1)
+        if self.left_trainable:
+            derivatives = jnp.pad(derivatives, (1, 2), constant_values=1)            
+        else:
+            derivatives = jnp.pad(derivatives, 2, constant_values=1)
+            
         return x_pos, y_pos, derivatives
 
     @partial(jax.vmap, in_axes=[None, 0, 0, 0, 0])

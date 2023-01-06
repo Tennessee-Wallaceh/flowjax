@@ -1,10 +1,8 @@
-from flowjax.bijections.abc import Transformer
+from flowjax.transformers import Transformer
 import jax.numpy as jnp
 import jax
 from jax.scipy.special import erfc, ndtri
 from functools import partial
-from jaxopt import Bisection
-from jax.scipy.stats import beta
 from tensorflow_probability.substrates import jax as tfp
 from jax.scipy.special import gammainc, gammaln
 
@@ -24,14 +22,14 @@ def min_max_domain(params, min_val, max_val):
     return tail_params[:, 0], tail_params[:, 1]
 
 class ExtremeValueActivation(Transformer):
+    _get_args: callable
     """
     ExtremeValueActivation (D. Prangle, T. Hickling)
 
     This transform is Reals -> Reals.
     """
-    # MIN_ERF_INV = jnp.finfo(jnp.float32).smallest_normal
     MIN_ERF_INV = 5e-7
-    def __init__( self, min_tail_param=1e-3, max_tail_param=1):
+    def __init__(self, min_tail_param=1e-3, max_tail_param=1):
         if max_tail_param is None:
             self._get_args = lambda params: pos_domain(params, min_tail_param)
         else:
@@ -103,6 +101,7 @@ class ExtremeValueActivation(Transformer):
 
 
 class TailTransformation(Transformer):
+    _get_args: callable
     """
     TailTransformation (D. Prangle, T. Hickling)
 

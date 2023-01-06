@@ -88,13 +88,47 @@ class CouplingFlow(Transformed):
         self.permute_strategy = permute_strategy
         super().__init__(base_dist, bijection)
 
+# masked autoregressive layer + permutation
+def make_layer(
+    key, 
+    dim, 
+    cond_dim,
+    transformer,
+    nn_width,
+    nn_depth,
+    nn_activation,
+    permute_strategy,
+):  
+    masked_auto_key, p_key = random.split(key)
+    masked_autoregressive = MaskedAutoregressive(
+        key=masked_auto_key,
+        transformer=transformer,
+        dim=dim,
+        cond_dim=cond_dim,
+        nn_width=nn_width,
+        nn_depth=nn_depth,
+        nn_activation=nn_activation,
+    )
+    if permute_strategy == "flip":
+        return Chain([masked_autoregressive, Flip()])
+    elif permute_strategy == "random":
+        perm = Permute(random.permutation(p_key, jnp.arange(dim)))
+        return Chain([masked_autoregressive, perm])
+    else:
+        return masked_autoregressive
+
+def build_masked_autoregressive_bijection(key, transformer, flow_layers, dim, cond_dim, nn_width, nn_depth, nn_activation, permute_strategy):
+    keys = random.split(key, flow_layers)
+    layers = eqx.filter_vmap(
+        lambda key: make_layer(key, dim, cond_dim, transformer, nn_width, nn_depth, nn_activation, permute_strategy)
+    )(keys)
+    return ScannableChain(layers)
 
 class MaskedAutoregressiveFlow(Transformed):
     flow_layers: int
     nn_width: int
     nn_depth: int
     permute_strategy: str
-
     def __init__(
         self,
         key: KeyArray,
@@ -126,82 +160,6 @@ class MaskedAutoregressiveFlow(Transformed):
         """
 
         permute_strategy = _default_permute_strategy(base_dist.dim)
-
-        def make_layer(key):  # masked autoregressive layer + permutation
-            masked_auto_key, p_key = random.split(key)
-            masked_autoregressive = MaskedAutoregressive(
-                key=masked_auto_key,
-                transformer=transformer,
-                dim=base_dist.dim,
-                cond_dim=cond_dim,
-                nn_width=nn_width,
-                nn_depth=nn_depth,
-                nn_activation=nn_activation,
-            )
-<<<<<<< HEAD
-            for key in layer_keys
-        ]
-        
-        if permute_strategy == "flip":
-            bijections = intertwine_flip(bijections)
-        elif permute_strategy == "random":
-            bijections = intertwine_random_permutation(permute_key, bijections, base_dist.dim)
-        elif permute_strategy != "none":
-            raise ValueError("Permute strategy should be 'flip', 'random' or 'none', if specified.")
-
-    bijection = Chain(bijections)
-    if invert is True:
-        bijection = Invert(bijection)
-    return Transformed(base_dist, bijection)
-
-
-def block_neural_autoregressive_flow(
-    key: KeyArray,
-    base_dist: Distribution,
-    cond_dim: int = 0,
-    nn_depth: int = 1,
-    nn_block_dim: int = 8,
-    flow_layers: int = 1,
-    permute_strategy: Optional[str] = None,
-    invert: bool = True,
-):
-    """Block neural autoregressive flow (BNAF) (https://arxiv.org/abs/1904.04676).
-
-    Args:
-        key (KeyArray): Jax PRNGKey.
-        base_dist (Distribution): Base distribution.
-        cond_dim (int): Dimension of conditional variables.
-        nn_depth (int, optional): Number of hidden layers within the networks. Defaults to 1.
-        nn_block_dim (int, optional): Block size. Hidden layer width is dim*nn_block_dim. Defaults to 8.
-        flow_layers (int, optional): Number of BNAF layers. Defaults to 1.
-        permute_strategy (Optional[str], optional): How to permute between layers. "flip", "random" or "none". Defaults to "flip" if dim==2, and "random" for dim > 2.
-        invert: (bool, optional): Use `True` for access of `log_prob` only (e.g. fitting by maximum likelihood), `False` for the forward direction (sampling) only (e.g. for fitting variationally).
-    """
-    if permute_strategy is None:
-        permute_strategy = default_permute_strategy(base_dist.dim)
-    if permute_strategy not in ["flip", "random", "none"]:
-        raise ValueError(
-            "Permute strategy should be 'flip', 'random' or 'none', if specified."
-        )
-
-    bijections = []  # type: List[Bijection]
-    for i in range(flow_layers):
-        key, *subkeys = random.split(key, 3)
-        bijections.append(
-            BlockAutoregressiveNetwork(
-                key=subkeys[0],
-=======
-            if permute_strategy == "flip":
-                return Chain([masked_autoregressive, Flip()])
-            elif permute_strategy == "random":
-                perm = Permute(random.permutation(p_key, jnp.arange(base_dist.dim)))
-                return Chain([masked_autoregressive, perm])
-            else:
-                return masked_autoregressive
-
-        keys = random.split(key, flow_layers)
-        layers = eqx.filter_vmap(make_layer)(keys)
-        bijection = ScannableChain(layers)
         bijection = Invert(bijection) if invert else bijection
 
         self.nn_width = nn_width
@@ -245,7 +203,6 @@ class BlockNeuralAutoregressiveFlow(Transformed):
             ban_key, p_key = random.split(key)
             ban = BlockAutoregressiveNetwork(
                 key=ban_key,
->>>>>>> 8d7d0230bb4a876f198cf6a5ac94492b590020cf
                 dim=base_dist.dim,
                 cond_dim=cond_dim,
                 depth=nn_depth,

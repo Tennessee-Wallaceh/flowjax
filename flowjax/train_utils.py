@@ -111,15 +111,15 @@ def train_flow(
     return dist, losses
 
 @eqx.filter_jit
-def elbo_loss(dist, target, key, elbo_samples=50):
+def elbo_loss(dist, target, key, elbo_samples=500):
     samples = dist.sample(key, n=elbo_samples)
     approx_density = dist.log_prob(samples).reshape(-1)
     target_density = target(samples).reshape(-1)
     losses = approx_density - target_density
-    max = jnp.max(jnp.isfinite(losses))
-    min = jnp.min(jnp.isfinite(losses))
-    finite_losses =  jnp.clip(losses, min, max)
-    return finite_losses.mean()
+    max = jnp.max(losses, where=jnp.isfinite(losses), initial=-jnp.inf)
+    min = jnp.min(losses, where=jnp.isfinite(losses), initial=jnp.inf)
+    losses = jnp.clip(losses, min, max)
+    return losses.mean()
 
 default_optimizer = optax.chain(
     optax.clip_by_global_norm(0.5), 
@@ -133,7 +133,6 @@ def variational_fit(
     max_epochs: int = 50,
     loss_fcn = elbo_loss,
     optimizer = default_optimizer,
-    max_patience: int = 5,
     show_progress: bool = True,
     recorder = None,
 ):
@@ -161,7 +160,9 @@ def variational_fit(
     opt_state = optimizer.init(best_params)
 
     losses = []
-    if recorder is not None:
+    if recorder is None:
+        record = None
+    else:
         record = []
 
     loop = tqdm(range(max_epochs)) if show_progress is True else range(max_epochs)
@@ -177,7 +178,6 @@ def variational_fit(
         if show_progress:
             loop.set_postfix({'elbo': losses[-1]})
 
-    dist = eqx.combine(best_params, static)
     return dist, losses, record
 
 

@@ -1,9 +1,11 @@
-from flowjax.bijections.abc import Transformer
 import jax
 import jax.numpy as jnp
+from jax import random
+
+from flowjax.transformers.abc import Transformer
 from flowjax.bijections.abc import Bijection
 from flowjax.utils import Array
-from jax import random
+
 
 class Univariate(Bijection):
     """

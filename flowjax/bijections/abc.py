@@ -12,20 +12,7 @@ from typing import Optional, Tuple
 from equinox import Module
 
 from flowjax.utils import Array
-import warnings
-
-from flowjax.transformers import Transformer as _Transformer
-
     
-class Transformer(_Transformer):
-    def __init__(self, *args, **kwargs) -> None:
-        "Deprecated location of transfomer, use flowjax.transformers.Transformer instead."
-        warnings.warn(
-            "Please use flowjax.transformers.Transformer.",
-            DeprecationWarning, stacklevel=2)
-        super().__init__(*args, **kwargs)
-    
-
 class Bijection(ABC, Module):
     """Basic bijection class. All bijections should support conditioning variables
     (even if ignored)."""

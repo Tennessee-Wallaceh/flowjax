@@ -12,19 +12,14 @@ from jax.scipy import stats as jstats
 
 from flowjax.bijections import Affine, Bijection
 from flowjax.utils import Array, broadcast_arrays_1d
-<<<<<<< HEAD
 from typing import Any
 import equinox as eqx
-from jax.scipy.special import ndtri, gammainc
 from flowjax.bijections.univariate import Fixed
-from flowjax.bijections.extreme import TailTransformation
-from jax.scipy.stats import beta
+from flowjax.transformers.extreme import TailTransformation
 
 # Tensorflow probability substrates
 import tensorflow_probability as tfp
 tquantile = tfp.substrates.jax.distributions.student_t.quantile
-=======
->>>>>>> 8d7d0230bb4a876f198cf6a5ac94492b590020cf
 
 # To construct a distribution, we define _log_prob and _sample, which take in vector arguments.
 # More friendly methods are then created from these, supporting batches of inputs.
@@ -135,6 +130,40 @@ class Distribution(eqx.Module, ABC):
                 raise ValueError(f"Expected condition.shape[-1]=={self.cond_dim}.")
 
 
+class JointIndepdendant(Distribution):
+    """
+    Implements a joint distribution of independent distributions.
+    The implementaion could probably be better.
+    """
+    distributions: dict[int, Distribution] # each distribution is univariate
+    sample: callable
+    log_prob: callable
+    def __init__(self, *dists, cond_dim=0) -> None:
+        super().__init__(dim=len(dists), cond_dim=cond_dim)
+        self.distributions = {}
+        for dim, dist in enumerate(dists):
+            self.distributions[dim] = dist
+
+    def sample(self, key: KeyArray, condition: Optional[Array] = None, n: int = None):
+        keys = random.split(key, len(self.distributions))
+        return jnp.hstack([
+            dist.sample(keys[dim], n=n).reshape(-1, 1)
+            for dim, dist in enumerate(self.distributions.values())
+        ])
+    
+    def log_prob(self, x: Array, condition: Optional[Array] = None):
+        return jnp.hstack([
+            dist.log_prob(x[:, [dim]]).reshape(-1, 1)
+            for dim, dist in enumerate(self.distributions.values())
+        ]).sum(axis=1)
+
+    def _log_prob(self, x: Array, condition: Optional[Array] = None):
+        pass
+
+    def _sample(self, key: KeyArray, condition: Optional[Array] = None):
+        pass
+
+
 class Transformed(Distribution):
     """
     Form a distribution object defined by a base distribution and a bijection.
@@ -146,10 +175,6 @@ class Transformed(Distribution):
     bijection: Bijection
     dim: int
     cond_dim: int
-<<<<<<< HEAD
-    def __init__( self, base_dist: Distribution, bijection: Bijection):
-        """
-=======
 
     def __init__(
         self,
@@ -161,7 +186,6 @@ class Transformed(Distribution):
         bijection. We take the forward bijection for use in sampling, and the inverse
         bijection for use in density evaluation.
 
->>>>>>> 8d7d0230bb4a876f198cf6a5ac94492b590020cf
         Args:
             base_dist (Distribution): Base distribution.
             bijection (Bijection): Bijection to transform distribution.
@@ -177,7 +201,6 @@ class Transformed(Distribution):
         return p_z + log_abs_det
 
     def _sample(self, key: KeyArray, condition: Optional[Array] = None):
-        assert x.shape == (self.dim,)
         z = self.base_dist._sample(key, condition)
         x = self.bijection.transform(z, condition)
         return x
@@ -188,7 +211,6 @@ class Transformed(Distribution):
 
 
 class StandardNormal(Distribution):
-
     def __init__(self, dim: int):
         """
         Implements a standard normal distribution, condition is ignored.
@@ -207,9 +229,6 @@ class StandardNormal(Distribution):
 
     def _sample(self, key: KeyArray, condition: Optional[Array] = None):
         return random.normal(key, (self.dim,))
-
-    def __repr__(self):
-        return f'<FJ N(0, 1)>'
 
     def quantile(self, u):
         return ndtri(u)
@@ -256,19 +275,15 @@ class _StandardUniform(Distribution):
     def _sample(self, key: KeyArray, condition: Optional[Array] = None):
         return random.uniform(key, shape=(self.dim,))
 
-    def __repr__(self):
-        return f'<FJ N({self.mean}, {self.std})>'
-
-    def quantile(self, u):
-        return ndtri(u)
 
 class Uniform(Transformed):
     """
     Implements an independent uniform distribution
     between min and max for each dimension. `minval` and `maxval` should be broadcastable.
     """
-
-    def __init__(self, minval: Array, maxval: Array):
+    loc: Array
+    scale: Array
+    def __init__(self, minval: Array, maxval: Array, fix: bool=False):
         """
         Args:
             minval (Array): ith entry gives the min of the ith dimension
@@ -278,19 +293,25 @@ class Uniform(Transformed):
         if jnp.any(maxval < minval):
             raise ValueError("Minimums must be less than maximums.")
         base_dist = _StandardUniform(minval.shape[0])
-        bijection = Affine(loc=minval, scale=maxval - minval)
+        self.loc = minval
+        self.scale = maxval - minval
+        if fix:
+            self.loc = jax.lax.stop_gradient(self.loc)
+            self.scale = jax.lax.stop_gradient(self.scale)
+
+        bijection = Affine(loc=self.loc, scale=self.scale)
         super().__init__(base_dist, bijection)
 
     @property
     def minval(self):
-        return self.bijection.loc
+        return self.loc
 
     @property
     def maxval(self):
-        return self.bijection.loc + self.bijection.scale
+        return self.loc + self.scale
 
     def quantile(self, u):
-        return (u  * (self.max - self.min)) + self.min
+        return (u  * (self.maxval - self.minval)) + self.minval
 
 
 class _StandardGumbel(Distribution):
@@ -410,10 +431,6 @@ class _StandardStudentT(Distribution):
 
 
 class StudentT(Transformed):
-<<<<<<< HEAD
-    "Student T distribution. `loc` and `scale` should be broadcastable."
-    def __init__(self, df: Array, loc: Array, scale: Array = 1.0):
-=======
     """Student T distribution (https://en.wikipedia.org/wiki/Student%27s_t-distribution)."""
 
     def __init__(self, df: Array, loc: Array = 0.0, scale: Array = 1.0):
@@ -425,7 +442,6 @@ class StudentT(Transformed):
             loc (Array): Location parameter. Defaults to 0.0.
             scale (Array, optional): Scale parameter. Defaults to 1.0.
         """
->>>>>>> 8d7d0230bb4a876f198cf6a5ac94492b590020cf
         df, loc, scale = broadcast_arrays_1d(df, loc, scale)
         self.dim = df.shape[0]
         self.cond_dim = 0
@@ -497,10 +513,31 @@ class HalfStudentT(Distribution):
         x = jnp.sqrt(df / beta - df)
         return x
 
-    def __repr__(self):
-        return (
-            '<FJ HalfStudentT('
-            f'neg_tail={self.neg_tail:.2f} | '
-            f'pos_tail={self.pos_tail:.2f} | '
-            ')>'
-        )
+
+class NealsFunnel(Distribution):
+    MIN_STD = 1e-6
+    base_std: Array
+    funnel_scale: float
+    def __init__(self, base_std, funnel_scale=0.5):
+        self.base_std = jnp.array([base_std])
+        self.funnel_scale = funnel_scale
+        self.dim = 2
+        self.cond_dim = 0
+
+    def _log_prob(self, x, condition=None):
+        x_1 = x[0].reshape(1)
+        x_2 = x[1].reshape(1)
+
+        log_p_x_1 = Normal(jnp.array([0]), self.base_std).log_prob(x_1)
+        log_p_x_2 = Normal(
+            jnp.array([0]), 
+            jnp.clip(jnp.exp(self.funnel_scale * x_1), self.MIN_STD)
+        ).log_prob(x_2)
+
+        return log_p_x_1 + log_p_x_2
+
+    def _sample(self, key, condition=None):
+        key_1, key_2 = random.split(key)
+        x_1 = Normal(jnp.array([0]), self.base_std).sample(key_1)
+        x_2 = Normal(0, jnp.exp(self.funnel_scale * x_1)).sample(key_2)
+        return jnp.hstack([x_1, x_2])
