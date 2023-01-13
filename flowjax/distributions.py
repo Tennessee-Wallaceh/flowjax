@@ -515,7 +515,7 @@ class HalfStudentT(Distribution):
 
 
 class NealsFunnel(Distribution):
-    MIN_STD = 1e-6
+    MIN_STD = 1e-10
     base_std: Array
     funnel_scale: float
     def __init__(self, base_std, funnel_scale=0.5):
@@ -540,4 +540,29 @@ class NealsFunnel(Distribution):
         key_1, key_2 = random.split(key)
         x_1 = Normal(jnp.array([0]), self.base_std).sample(key_1)
         x_2 = Normal(0, jnp.exp(self.funnel_scale * x_1)).sample(key_2)
+        return jnp.hstack([x_1, x_2])
+
+
+class DepStut(Distribution):
+    base_df: Array
+    def __init__(self, base_df):
+        self.base_df = jnp.array([base_df])
+        self.dim = 2
+        self.cond_dim = 0
+
+    def _log_prob(self, x, condition=None):
+        x_1 = x[0].reshape(1)
+        x_2 = x[1].reshape(1)
+
+        log_p_x_1 = _StandardStudentT(self.base_df).log_prob(x_1)
+        x_2_df = 1. + 10. * jax.nn.sigmoid(x_1)
+        log_p_x_2 = _StandardStudentT(x_2_df).log_prob(x_2)
+
+        return log_p_x_1 + log_p_x_2
+
+    def _sample(self, key, condition=None):
+        key_1, key_2 = random.split(key)
+        x_1 = _StandardStudentT(self.base_df).sample(key_1)
+        x_2_df = 1. + 10. * jax.nn.sigmoid(x_1)
+        x_2 = _StandardStudentT(x_2_df).sample(key_2)
         return jnp.hstack([x_1, x_2])
