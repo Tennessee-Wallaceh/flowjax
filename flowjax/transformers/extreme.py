@@ -10,16 +10,14 @@ def _erfcinv(x):
     return -ndtri(0.5 * x) / jnp.sqrt(2)
 
 def pos_domain(params, min_val):
-    params = params.reshape((-1, 2))
     tail_params = min_val + jnp.exp(params)
-    return tail_params[:, 0], tail_params[:, 1]
+    return tail_params.split(2) # pos, neg
 
 def min_max_domain(params, min_val, max_val):
-    params = params.reshape((-1, 2))
     tail_params = jax.nn.sigmoid(params)
     tail_params *= max_val - min_val
     tail_params += min_val
-    return tail_params[:, 0], tail_params[:, 1]
+    return tail_params.split(2) # pos, neg
 
 class ExtremeValueActivation(Transformer):
     _get_args: callable
@@ -94,7 +92,7 @@ class ExtremeValueActivation(Transformer):
         return dim * 2
     
     def get_ranks(self, dim: int):
-        return jnp.repeat(jnp.arange(dim), 2)
+        return jnp.tile(jnp.arange(dim), 2)
 
     def get_args(self, *args, **kwargs):
         return self._get_args(*args, **kwargs)
@@ -174,8 +172,6 @@ class SwitchTransform(Transformer):
     SwitchTransform (D. Prangle, T. Hickling)
 
     This transform is Reals -> Reals.
-
-    The parameter is unconstrained.
     """
     MIN_ERF_INV = 5e-7
     @partial(jax.vmap, in_axes=[None, 0, 0, 0])
@@ -185,10 +181,12 @@ class SwitchTransform(Transformer):
         heavy_param = jnp.abs(tail_param)
         light_param = -jnp.abs(tail_param)
 
+        # The heavy transformation
         g = erfc(jnp.abs(z) / jnp.sqrt(2))
         heavy_transformed = sign / heavy_param
         heavy_transformed *= jnp.power(g, -tail_param) - 1
 
+        # The light transformation
         light_transformed = sign * jnp.power(jnp.abs(z), 2 + light_param)
         
         return jnp.where(
@@ -255,6 +253,9 @@ class SwitchTransform(Transformer):
         return jnp.repeat(jnp.arange(dim), 2)
 
     def get_args(self, params):
+        """
+        Parameter should be in [-1, inf]
+        """
         params = jnp.exp(params.reshape((-1, 2))) - 1
         return params[:, 0], params[:, 1]
 
@@ -318,6 +319,11 @@ class ShiftChi(Transformer):
         return params[:, 0], params[:, 1]
 
 class Power(Transformer):
+    eps: float
+
+    def __init__(self, eps):
+        self.eps = eps
+
     """
     Power (D. Prangle, T. Hickling)
 
@@ -329,7 +335,7 @@ class Power(Transformer):
     def transform(self, z, pos_tail, neg_tail):
         sign = jnp.sign(z)
         tail_param = jnp.where(sign > 0, pos_tail, neg_tail)
-        transformed = sign * jnp.power(jnp.abs(z), 2 + tail_param)
+        transformed = sign * jnp.power(jnp.abs(z), tail_param)
         return transformed
 
     @partial(jax.vmap, in_axes=[None, 0, 0, 0])
@@ -341,19 +347,21 @@ class Power(Transformer):
         sign = jnp.sign(x)
         x_adj = jnp.clip(jnp.abs(x), 1e-6)
         tail_param = jnp.where(sign > 0, pos_tail, neg_tail)
-        transformed = sign * jnp.power(x_adj, 1 / (2 + tail_param))
+        transformed = sign * jnp.power(x_adj, 1 / tail_param)
         return transformed
 
     @partial(jax.vmap, in_axes=[None, 0, 0, 0])
     def inverse_and_log_abs_det_jacobian(self, x, pos_tail, neg_tail):
         sign = jnp.sign(x)
-        tail_param = jnp.where(sign > 0, pos_tail, neg_tail)
-        x_adj = jnp.clip(jnp.abs(x), 1e-6)
-        
-        transformed = sign * jnp.power(x_adj, 1 / (2 + tail_param))
+        abs_x = jnp.abs(x)
 
-        lad = -jnp.log(2 + tail_param)
-        lad -= (1 + tail_param) * jnp.log(x_adj) / (2 + tail_param)
+        tail_param = jnp.where(sign > 0, pos_tail, neg_tail)
+        
+        transformed = jnp.power(abs_x + self.eps, 1 / tail_param) - self.eps
+        transformed = sign * transformed
+
+        lad = -jnp.log(tail_param)
+        lad += (1 / tail_param - 1) * jnp.log(abs_x + self.eps)
 
         return  transformed, lad
 
