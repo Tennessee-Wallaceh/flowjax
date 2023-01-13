@@ -158,3 +158,102 @@ class RationalQuadraticSplineTransformer(Transformer):
         num = sk**2 * (dk1 * xi**2 + 2 * sk * xi * (1 - xi) + dk * (1 - xi) ** 2)
         den = (sk + (dk1 + dk - 2 * sk) * xi * (1 - xi)) ** 2
         return num / den
+
+class Orthogonal:
+    dim: int
+    def __init__(self, dim):
+        self.dim = dim
+
+    def transform(self, x, transformation_matrix):
+        return transformation_matrix.dot(x)
+
+    def transform_and_log_abs_det_jacobian(self, x, transformation_matrix):
+        return transformation_matrix.dot(x), 0
+
+    def inverse(self, y, transformation_matrix):
+        return transformation_matrix.T.dot(y)
+
+    def inverse_and_log_abs_det_jacobian(self, y, transformation_matrix):
+        return transformation_matrix.T.dot(y), 0
+
+    def num_params(self, dim):
+        # number of paramters in a dim x dim lower 
+        # triangular matrix
+        lower_triag_params = int((dim ** 2 - dim) / 2)
+        return lower_triag_params
+
+    def get_ranks(self, dim):
+        # Since we know our LAD, we don't need the dependency 
+        # "trick" for computing LAD. As such full dep
+        # between inputs and transform params is ok.
+        return jnp.zeros(self.num_params(dim))
+
+    def get_args(self, params):
+        """
+        The exponential map (Golinski et al., 2019).
+        For A skew-symmetric (A^T = -A) exp A is orthogonal and 
+        has determinant of 1.
+        The matrix exponential is slow, O(dim^3), so scales only 
+        for small dim problems.
+        """
+        low_tri_indx = jnp.tril_indices(self.dim, k=-1)
+        upp_tri_indx = jnp.triu_indices(self.dim, k=1)
+
+        skew_sym = jnp.zeros([self.dim, self.dim])
+        skew_sym = skew_sym.at[low_tri_indx].set(params)
+        skew_sym = skew_sym.at[upp_tri_indx].set(-params)
+
+        transform = jax.scipy.linalg.expm(skew_sym)
+
+        return (transform, )
+
+class Glue(Transformer):
+    transformers: list[Transformer]
+    dim: int
+    def __init__(self, dim, *transformers):
+        self.transformers = transformers
+        self.dim = dim
+
+    def transform(self, x, *args):
+        for transformer, t_args in zip(self.transformers, args):
+            x = transformer.transform(x, *t_args)
+        return x
+
+    def transform_and_log_abs_det_jacobian(self, x, *args):
+        lad = 0.
+        for transformer, t_args in zip(self.transformers, args):
+            x, _lad = transformer.transform_and_log_abs_det_jacobian(x, *t_args)
+            lad += _lad
+        return x, lad
+
+    def inverse(self, y, *args):
+        for transformer, t_args in zip(self.transformers[::-1], args[::-1]):
+            y = transformer.inverse(y, *t_args)
+        return y
+
+    def inverse_and_log_abs_det_jacobian(self, y, *args):
+        lad = 0.
+        for transformer, t_args in zip(self.transformers[::-1], args[::-1]):
+            y, _lad = transformer.inverse_and_log_abs_det_jacobian(y, *t_args)
+            lad += _lad
+        return y, lad
+
+    def num_params(self, dim):
+        return sum(
+            transformer.num_params(dim)
+            for transformer in self.transformers
+        )
+
+    def get_ranks(self, dim):
+        return jnp.hstack([
+            transformer.get_ranks(dim)
+            for transformer in self.transformers
+        ])
+
+    def get_args(self, params):
+        args = []
+        for transformer in self.transformers:
+            num_params = transformer.num_params(self.dim)
+            args.append(transformer.get_args(params[:num_params]))
+            params = params[num_params:]
+        return args
