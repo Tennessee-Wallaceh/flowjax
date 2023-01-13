@@ -14,12 +14,12 @@ class Univariate(Bijection):
     transformer: Transformer
     cond_dim: int
     params: Array
-    def __init__(self, transformer: Transformer, key):
+    def __init__(self, transformer: Transformer, key, dim=1):
         self.transformer = transformer
         self.cond_dim = 0
 
         # Initialise the transform parameters
-        self.params = random.normal(key, shape=(transformer.num_params(1),))
+        self.params = random.normal(key, shape=(transformer.num_params(dim),))
 
     def transform(self, z: Array, condition=None):
         transform_args = self.transformer.get_args(self.params)
