@@ -121,6 +121,27 @@ def elbo_loss(dist, target, key, elbo_samples=500):
     losses = jnp.clip(losses, min, max)
     return losses.mean()
 
+def stop_grad(dist):
+    trainable, static = eqx.partition(dist, eqx.is_inexact_array)
+    no_grad_trainable = jax.tree_map(jax.lax.stop_gradient, trainable) 
+    return eqx.combine(no_grad_trainable, static)
+
+@eqx.filter_jit
+def path_elbo_loss(dist, target, key, elbo_samples=500):
+    """
+    Computes elbo loss, but discarding gradients arising from the score function.
+    See "Sticking the Landing: Simple, Lower-Variance Gradient Estimators for
+     Variational Inference" (https://arxiv.org/pdf/1703.09194.pdf) for details.
+    """
+    samples = dist.sample(key, n=elbo_samples) # grads with respect to samples
+    approx_density = stop_grad(dist).log_prob(samples).reshape(-1) # but not the density
+    target_density = target(samples).reshape(-1)
+    losses = approx_density - target_density
+    max = jnp.max(losses, where=jnp.isfinite(losses), initial=-jnp.inf)
+    min = jnp.min(losses, where=jnp.isfinite(losses), initial=jnp.inf)
+    losses = jnp.clip(losses, min, max)
+    return losses.mean()
+
 default_optimizer = optax.chain(
     optax.clip_by_global_norm(0.5), 
     optax.adam(learning_rate=5e-4)
