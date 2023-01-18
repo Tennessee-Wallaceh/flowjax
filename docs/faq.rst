@@ -4,7 +4,7 @@ FAQ
 Freezing parameters
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 Often it is useful to not train particular parameters. To achieve this we can provide a
-``filter_spec`` to :py:func:`~flowjax.train_utils.train_flow`. For example, to avoid
+``filter_spec`` to :py:func:`~flowjax.train.train_flow`. For example, to avoid
 training the base distribution, we could create a ``filter_spec`` as follows
 
 .. code-block:: python
@@ -44,11 +44,12 @@ The methods of distributions and bijections are not jitted by default. For examp
     # Often slow - sample not jitted!
     results = []
     for batch_key in keys:
-        x = flow.sample(batch_key, n=batch_size)
+        x = flow.sample(batch_key, sample_shape=(batch_size,)
         results.append(x)
 
     # Fast - sample jitted!
     results = []
     for batch_key in keys:
-        x = eqx.filter_jit(flow.sample)(batch_key, n=batch_size)
+        x = eqx.filter_jit(flow.sample)(batch_key, sample_shape=(batch_size,))
         results.append(x)
+        

@@ -6,10 +6,9 @@ from jax import random
 
 from flowjax.bijections import Affine
 from flowjax.distributions import Normal, Transformed
-from flowjax.train_utils import (
+from flowjax.train.data_fit import (
     count_fruitless,
-    random_permutation_multiple,
-    train_flow,
+    fit_to_data,
     train_val_split,
 )
 
@@ -31,14 +30,6 @@ def test_train_val_split():
     assert test[1].shape == (10, 5)
 
 
-def test_random_permutation_multiple():
-    x = jnp.arange(10).reshape((5, 2))
-    y = jnp.arange(15).reshape((5, 3))
-    before = jnp.sort(jnp.concatenate((x, y), axis=1).sum(axis=1))
-    x2, y2 = random_permutation_multiple(random.PRNGKey(0), (x, y))
-    after = jnp.sort(jnp.concatenate((x2, y2), axis=1).sum(axis=1))
-    assert (before == after).all()
-
 
 def test_train_flow_filter_spec():
     dim = 3
@@ -49,7 +40,7 @@ def test_train_flow_filter_spec():
     # All params should change by default
     before = eqx.filter(flow, eqx.is_inexact_array)
     x = random.normal(random.PRNGKey(0), (100, dim))
-    flow, _ = train_flow(random.PRNGKey(0), flow, x, max_epochs=1, batch_size=50)
+    flow, _ = fit_to_data(random.PRNGKey(0), flow, x, max_epochs=1, batch_size=50)
     after = eqx.filter(flow, eqx.is_inexact_array)
 
     assert jnp.all(before.base_dist.bijection.loc != after.base_dist.bijection.loc)
@@ -59,7 +50,7 @@ def test_train_flow_filter_spec():
     before = eqx.filter(flow, eqx.is_inexact_array)
     filter_spec = jtu.tree_map(lambda x: eqx.is_inexact_array(x), flow)
     filter_spec = eqx.tree_at(lambda tree: tree.base_dist, filter_spec, replace=False)
-    flow, _ = train_flow(
+    flow, _ = fit_to_data(
         random.PRNGKey(0), flow, x, max_epochs=1, batch_size=50, filter_spec=filter_spec
     )
     after = eqx.filter(flow, eqx.is_inexact_array)

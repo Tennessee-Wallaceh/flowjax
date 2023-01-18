@@ -12,10 +12,11 @@ Installation
 .. toctree::
    :caption: Examples
    :maxdepth: 1
+   :glob:
 
    examples/unconditional
    examples/conditional
-
+   examples/variational_inference
 
 .. toctree::
    :caption: API
@@ -29,4 +30,3 @@ Installation
    :caption: Miscellaneous
    
    faq
-
