@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional
 
 import equinox as eqx
 import jax.numpy as jnp
@@ -9,10 +9,12 @@ import jax.tree_util as jtu
 from jax.random import KeyArray
 from jaxtyping import PyTree
 from tqdm import tqdm
+import optax
 
 from flowjax.distributions import Distribution
 from flowjax.utils import Array
 
+from flowjax.train.train_utils import train_val_split, count_fruitless
 
 def fit_to_data(
     key: KeyArray,
@@ -21,15 +23,16 @@ def fit_to_data(
     condition: Optional[Array] = None,
     max_epochs: int = 50,
     max_patience: int = 5,
-    learning_rate: float = 5e-4,
     batch_size: int = 256,
     val_prop: float = 0.1,
+    learning_rate: float = 5e-4,
     clip_norm: float = 0.5,
-    show_progress: bool = True,
+    optimizer: Optional[optax.GradientTransformation] = None,
     filter_spec: PyTree[BoolAxisSpec] = eqx.is_inexact_array,
     recorder=None,
+    show_progress: bool = True,
 ):
-    """Train a distribution (e.g. a flow) by maximum likelihood with Adam optimizer. Note that the last batch in each epoch is dropped if truncated.
+    """Train a distribution (e.g. a flow) to samples by maximum likelihood. Note that the last batch in each epoch is dropped if truncated.
 
     Args:
         key (KeyArray): Jax PRNGKey.
@@ -38,44 +41,45 @@ def fit_to_data(
         condition (Optional[Array], optional): Conditioning variables. Defaults to None.
         max_epochs (int, optional): Maximum number of epochs. Defaults to 50.
         max_patience (int, optional): Number of consecutive epochs with no validation loss improvement after which training is terminated. Defaults to 5.
-        learning_rate (float, optional): Adam learning rate. Defaults to 5e-4.
         batch_size (int, optional): Batch size. Defaults to 256.
         val_prop (float, optional): Proportion of data to use in validation set. Defaults to 0.1.
+        learning_rate (float, optional): Adam learning rate. Defaults to 5e-4.
         clip_norm (float, optional): Maximum gradient norm before clipping occurs. Defaults to 0.5.
-        show_progress (bool, optional): Whether to show progress bar. Defaults to True.
+        optimizer (optax.GradientTransformation): Optax optimizer. If provided, this overrides the default Adam optimizer, and the learning_rate and clip_norm arguments are ignored. Defaults to None.
         filter_spec (PyTree[BoolAxisSpec], optional): Equinox `filter_spec` for specifying trainable parameters. Either a callable `leaf -> bool`, or a PyTree with prefix structure matching `dist` with True/False values. Defaults to `eqx.is_inexact_array`.
+        show_progress (bool, optional): Whether to show progress bar. Defaults to True.
     """
     static_filter_spec = jtu.tree_map(lambda x: filter_spec(x), dist)
     @eqx.filter_jit
-    def loss(dist, x, condition=None):
+    def loss_fn(dist, x, condition=None):
         return -dist.log_prob(x, condition).mean()
 
     @eqx.filter_jit
     def step(dist, optimizer, opt_state, x, condition=None):
-        loss_val, grads = eqx.filter_value_and_grad(loss, arg=static_filter_spec)(
+        loss_val, grads = eqx.filter_value_and_grad(loss_fn, arg=static_filter_spec)(
             dist, x, condition
         )
         updates, opt_state = optimizer.update(grads, opt_state)
         dist = eqx.apply_updates(dist, updates)
         return dist, opt_state, loss_val
 
-    key, subkey = random.split(key)
+    if optimizer is None:
+        optimizer = optimizer = optax.chain(
+            optax.clip_by_global_norm(clip_norm), optax.adam(learning_rate=learning_rate)
+        )
+    
+    best_params, static = eqx.partition(dist, static_filter_spec)
+    opt_state = optimizer.init(best_params)
+
+    key, train_val_split_key = random.split(key)
 
     inputs = (x,) if condition is None else (x, condition)
-    train_args, val_args = train_val_split(subkey, inputs, val_prop=val_prop)
+    train_args, val_args = train_val_split(train_val_split_key, inputs, val_prop=val_prop)
     train_len, val_len = train_args[0].shape[0], val_args[0].shape[0]
     if batch_size > train_len:
         raise ValueError(
             f"The batch size ({batch_size}) cannot be greater than the train set size ({train_len})."
         )
-
-    optimizer = optax.chain(
-        optax.clip_by_global_norm(clip_norm), 
-        optax.adam(learning_rate=learning_rate)
-    )
-
-    best_params, static = eqx.partition(dist, static_filter_spec)
-    opt_state = optimizer.init(best_params)
 
     losses = {"train": [], "val": []}  # type: Dict[str, List[float]]
 
@@ -98,7 +102,7 @@ def fit_to_data(
         batch_start_idxs = range(0, val_len - batch_size + 1, batch_size)
         for i in batch_start_idxs:
             batch = tuple(a[i : i + batch_size] for a in val_args)
-            epoch_val_loss += loss(dist, *batch).item() / len(batch_start_idxs)
+            epoch_val_loss += loss_fn(dist, *batch).item() / len(batch_start_idxs)
 
         losses["train"].append(epoch_train_loss)
         losses["val"].append(epoch_val_loss)
@@ -118,130 +122,5 @@ def fit_to_data(
             loop.set_postfix({k: v[-1] for k, v in losses.items()})
 
     dist = eqx.combine(best_params, static)
-
     return dist, losses
 
-@eqx.filter_jit
-def elbo_loss(dist, target, key, elbo_samples=500):
-    samples = dist.sample(key, n=elbo_samples)
-    approx_density = dist.log_prob(samples).reshape(-1)
-    target_density = target(samples).reshape(-1)
-    losses = approx_density - target_density
-    max = jnp.max(losses, where=jnp.isfinite(losses), initial=-jnp.inf)
-    min = jnp.min(losses, where=jnp.isfinite(losses), initial=jnp.inf)
-    losses = jnp.clip(losses, min, max)
-    return losses.mean()
-
-def stop_grad(dist):
-    trainable, static = eqx.partition(dist, eqx.is_inexact_array)
-    no_grad_trainable = jax.tree_map(jax.lax.stop_gradient, trainable) 
-    return eqx.combine(no_grad_trainable, static)
-
-@eqx.filter_jit
-def path_elbo_loss(dist, target, key, elbo_samples=500):
-    """
-    Computes elbo loss, but discarding gradients arising from the score function.
-    See "Sticking the Landing: Simple, Lower-Variance Gradient Estimators for
-     Variational Inference" (https://arxiv.org/pdf/1703.09194.pdf) for details.
-    """
-    samples = dist.sample(key, n=elbo_samples) # grads with respect to samples
-    approx_density = stop_grad(dist).log_prob(samples).reshape(-1) # but not the density
-    target_density = target(samples).reshape(-1)
-    losses = approx_density - target_density
-    max = jnp.max(losses, where=jnp.isfinite(losses), initial=-jnp.inf)
-    min = jnp.min(losses, where=jnp.isfinite(losses), initial=jnp.inf)
-    losses = jnp.clip(losses, min, max)
-    return losses.mean()
-
-default_optimizer = optax.chain(
-    optax.clip_by_global_norm(0.5), 
-    optax.adam(learning_rate=5e-4)
-)
-
-def variational_fit(
-    key: KeyArray,
-    dist: Distribution,
-    target,
-    max_epochs: int = 50,
-    loss_fcn = elbo_loss,
-    optimizer = default_optimizer,
-    show_progress: bool = True,
-    recorder = None,
-):
-    """
-    Train a distribution (e.g. a flow) by variational inference.
-
-    Args:
-        key (KeyArray): Jax PRNGKey.
-        dist (Distribution): Distribution object, trainable parameters are found using equinox.is_inexact_array.
-        max_epochs (int, optional): Maximum number of epochs. Defaults to 50.
-        max_patience (int, optional): Number of consecutive epochs with no validation loss improvement after which training is terminated. Defaults to 5.
-        learning_rate (float, optional): Adam learning rate. Defaults to 5e-4.
-        val_prop (float, optional): Proportion of data to use in validation set. Defaults to 0.1.
-        clip_norm (float, optional): Maximum gradient norm before clipping occurs. Defaults to 0.5.
-        show_progress (bool, optional): Whether to show progress bar. Defaults to True.
-    """
-    @eqx.filter_jit
-    def step(dist, target, key, optimizer, opt_state):
-        loss_val, grads = eqx.filter_value_and_grad(loss_fcn)(dist, target, key)
-        updates, opt_state = optimizer.update(grads, opt_state)
-        dist = eqx.apply_updates(dist, updates)
-        return dist, opt_state, loss_val
-
-    best_params, static = eqx.partition(dist, eqx.is_inexact_array)
-    opt_state = optimizer.init(best_params)
-
-    losses = []
-    if recorder is None:
-        record = None
-    else:
-        record = []
-
-    loop = tqdm(range(max_epochs)) if show_progress is True else range(max_epochs)
-    for iteration in loop:
-        key, subkey = random.split(key)
-        dist, opt_state, loss = step(dist, target, subkey, optimizer, opt_state)
-        
-        if recorder is not None:
-            record.append(recorder(dist))
-
-        losses.append(loss.item())
-
-        if show_progress:
-            loop.set_postfix({'elbo': losses[-1]})
-
-    return dist, losses, record
-
-
-def train_val_split(key: KeyArray, arrays: Sequence[Array], val_prop: float = 0.1):
-    """Train validation split along axis 0.
-
-    Args:
-        key (KeyArray): Jax PRNGKey
-        arrays List[Array]: List of arrays.
-        val_prop (float, optional): Proportion of data to use for validation. Defaults to 0.1.
-
-    Returns:
-        Tuple[Tuple]: (train_arrays, validation_arrays)
-    """
-    if not (0 <= val_prop <= 1):
-        raise ValueError("val_prop should be between 0 and 1.")
-    n = arrays[0].shape[0]
-    permutation = random.permutation(key, jnp.arange(n))
-    arrays = tuple(a[permutation] for a in arrays)
-    n_train = n - round(val_prop * n)
-    train = tuple(a[:n_train] for a in arrays)
-    val = tuple(a[n_train:] for a in arrays)
-    return train, val
-
-
-def count_fruitless(losses: List[float]) -> int:
-    """Given a list of losses from each epoch, count the number of epochs since
-    the minimum loss.
-
-    Args:
-        losses (List[float]): List of losses.
-
-    """
-    min_idx = jnp.argmin(jnp.array(losses)).item()
-    return len(losses) - min_idx - 1

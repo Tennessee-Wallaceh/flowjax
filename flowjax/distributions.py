@@ -90,16 +90,16 @@ class Distribution(eqx.Module, ABC):
         else:
             sig = _get_ufunc_signature([self.shape], [()])
             exclude = {1}
-
-        return jnp.vectorize(self._log_prob, signature=sig, excluded=exclude)(
+        lps = jnp.vectorize(self._log_prob, signature=sig, excluded=exclude)(
             x, condition
         )
+        return jnp.where(jnp.isnan(lps), -jnp.inf, lps)
 
     def sample(
         self,
         key: jr.PRNGKey,
-        condition: Optional[Array] = None,
         sample_shape: Tuple[int] = (),
+        condition: Optional[Array] = None,
     ):
         """Sample from the distribution. For unconditional distributions, the output will
         be of shape ``sample_shape + dist.shape``.
@@ -125,7 +125,7 @@ class Distribution(eqx.Module, ABC):
 
                 >>> dist.shape
                 (2,)
-                >>> samples = dist.sample(key, sample_shape=(10, ))
+                >>> samples = dist.sample(key, (10, ))
                 >>> samples.shape
                 (10, 2)
 
@@ -138,7 +138,7 @@ class Distribution(eqx.Module, ABC):
                 >>> cond_dist.cond_shape
                 (3,)
                 >>> # Sample 10 times for a particular condition
-                >>> samples = cond_dist.sample(key, condition=jnp.ones(3), sample_shape=(10,))
+                >>> samples = cond_dist.sample(key, (10,), condition=jnp.ones(3))
                 >>> samples.shape
                 (10, 2)
                 >>> # Sampling, batching over a condition
@@ -146,7 +146,7 @@ class Distribution(eqx.Module, ABC):
                 >>> samples.shape
                 (5, 2)
                 >>> # Sample 10 times for each of 5 conditioning variables
-                >>> samples = cond_dist.sample(key, condition=jnp.ones((5, 3)), sample_shape=(10, ))
+                >>> samples = cond_dist.sample(key, (10,), condition=jnp.ones((5, 3)))
                 >>> samples.shape
                 (10, 5, 2)
 
@@ -179,8 +179,8 @@ class Distribution(eqx.Module, ABC):
     def sample_and_log_prob(
         self,
         key: jr.PRNGKey,
+        sample_shape: Tuple[int] = (),
         condition: Optional[Array] = None,
-        sample_shape: Tuple[int] = ()
         ):
         """Sample the distribution and return the samples and corresponding log probabilities.
         For transformed distributions (especially flows), this will generally be more efficient
@@ -320,7 +320,12 @@ class Transformed(Distribution):
             >>> normal = StandardNormal()
             >>> bijection = Affine(1)
             >>> transformed = Transformed(normal, bijection)
-            
+
+        
+        .. warning::
+            It is the currently the users responsibility to ensure the bijection is valid
+            across the entire support of the distribution. Failure to do so may lead to
+            to unexpected results. In future versions explicit constraints may be introduced.
         """
         self.base_dist = base_dist
         self.bijection = bijection
