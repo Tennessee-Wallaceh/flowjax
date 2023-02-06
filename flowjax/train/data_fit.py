@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import optax
 from equinox.custom_types import BoolAxisSpec
 from jax import random
+import jax.tree_util as jtu
 from jax.random import KeyArray
 from jaxtyping import PyTree
 from tqdm import tqdm
@@ -26,6 +27,7 @@ def fit_to_data(
     clip_norm: float = 0.5,
     show_progress: bool = True,
     filter_spec: PyTree[BoolAxisSpec] = eqx.is_inexact_array,
+    recorder=None,
 ):
     """Train a distribution (e.g. a flow) by maximum likelihood with Adam optimizer. Note that the last batch in each epoch is dropped if truncated.
 
@@ -43,13 +45,14 @@ def fit_to_data(
         show_progress (bool, optional): Whether to show progress bar. Defaults to True.
         filter_spec (PyTree[BoolAxisSpec], optional): Equinox `filter_spec` for specifying trainable parameters. Either a callable `leaf -> bool`, or a PyTree with prefix structure matching `dist` with True/False values. Defaults to `eqx.is_inexact_array`.
     """
+    static_filter_spec = jtu.tree_map(lambda x: filter_spec(x), dist)
     @eqx.filter_jit
     def loss(dist, x, condition=None):
         return -dist.log_prob(x, condition).mean()
 
     @eqx.filter_jit
     def step(dist, optimizer, opt_state, x, condition=None):
-        loss_val, grads = eqx.filter_value_and_grad(loss, arg=filter_spec)(
+        loss_val, grads = eqx.filter_value_and_grad(loss, arg=static_filter_spec)(
             dist, x, condition
         )
         updates, opt_state = optimizer.update(grads, opt_state)
@@ -64,13 +67,14 @@ def fit_to_data(
     if batch_size > train_len:
         raise ValueError(
             f"The batch size ({batch_size}) cannot be greater than the train set size ({train_len})."
-            )
+        )
 
     optimizer = optax.chain(
-        optax.clip_by_global_norm(clip_norm), optax.adam(learning_rate=learning_rate)
+        optax.clip_by_global_norm(clip_norm), 
+        optax.adam(learning_rate=learning_rate)
     )
 
-    best_params, static = eqx.partition(dist, filter_spec)
+    best_params, static = eqx.partition(dist, static_filter_spec)
     opt_state = optimizer.init(best_params)
 
     losses = {"train": [], "val": []}  # type: Dict[str, List[float]]
@@ -99,8 +103,11 @@ def fit_to_data(
         losses["train"].append(epoch_train_loss)
         losses["val"].append(epoch_val_loss)
 
+        if recorder is not None:
+            recorder(dist)
+
         if epoch_val_loss == min(losses["val"]):
-            best_params = eqx.filter(dist, eqx.is_inexact_array)
+            best_params = eqx.filter(dist, static_filter_spec)
 
         elif count_fruitless(losses["val"]) > max_patience:
             if show_progress == True:
