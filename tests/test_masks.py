@@ -8,7 +8,12 @@ def test_rank_based_mask():
     in_ranks = jnp.arange(2)
     out_ranks = jnp.array([0, 1, 1, 2])
 
-    expected_mask = jnp.array([[0, 0], [1, 0], [1, 0], [1, 1]], dtype=jnp.int32)
+    expected_mask = jnp.array([
+        [0, 0], 
+        [1, 0], 
+        [1, 0], 
+        [1, 1]
+    ], dtype=jnp.int32)
 
     mask = rank_based_mask(in_ranks, out_ranks)
     assert jnp.all(expected_mask == mask)
@@ -16,7 +21,10 @@ def test_rank_based_mask():
     in_ranks = jnp.array([0, 0, 1, 1])
     out_ranks = jnp.array([0, 1])
 
-    expected_mask = jnp.array([[0, 0, 0, 0], [1, 1, 0, 0]], dtype=jnp.int32)
+    expected_mask = jnp.array([
+        [0, 0, 0, 0], 
+        [1, 1, 0, 0]
+    ], dtype=jnp.int32)
     mask = rank_based_mask(in_ranks, out_ranks)
     assert jnp.all(expected_mask == mask)
 
