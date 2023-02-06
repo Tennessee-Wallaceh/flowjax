@@ -135,6 +135,46 @@ class Partial(Bijection):
         return y.at[self.idxs].set(x), log_det
 
 
+class EachDimension(Bijection):
+    bijections: list[Bijection]
+    def __init__(self, bijections: list[Bijection]):
+        """
+        Args:
+            bijection (Bijection): Bijection that is compatible with the subset of x indexed by idxs.
+            idxs: Indices (Integer, a slice, or an ndarray with integer/bool dtype) of the transformed portion.
+        """
+        self.bijections = [
+            Partial(bij, ix)
+            for ix, bij in enumerate(bijections)
+        ]
+        self.shape = (len(bijections))
+        self.cond_shape = None
+
+    def transform(self, x: Array, condition=None):
+        for bij in self.bijections:
+            x = bij.transform(x, condition)
+        return x
+
+    def transform_and_log_abs_det_jacobian(self, x: Array, condition=None):
+        lad = 0
+        for bij in self.bijections:
+            x, _lad = bij.transform_and_log_abs_det_jacobian(x, condition)
+            lad += _lad
+        return x, lad
+
+    def inverse(self, y: Array, condition=None) -> Array:
+        for bij in self.bijections:
+            y = bij.inverse(y, condition)
+        return y
+
+    def inverse_and_log_abs_det_jacobian(self, y: Array, condition=None) -> Array:
+        lad = 0
+        for bij in self.bijections:
+            y, _lad = bij.inverse_and_log_abs_det_jacobian(y, condition)
+            lad += _lad
+        return y, lad
+
+ 
 class EmbedCondition(Bijection):
     bijection: Bijection
     embedding_net: eqx.Module
@@ -178,3 +218,35 @@ class EmbedCondition(Bijection):
         self._argcheck(y, condition)
         condition = self.embedding_net(condition)
         return self.bijection.inverse_and_log_abs_det_jacobian(y, condition)
+
+
+class Glue(Bijection):
+    bijections: list[Bijection]
+    def __init__(self, *bijections):
+        self.shape = ()
+        self.cond_shape = None
+        self.bijections = bijections
+
+    def transform(self, z, condition=None):
+        for bijection in self.bijections:
+            z = bijection.transform(z, condition)
+        return z
+
+    def transform_and_log_abs_det_jacobian(self, z, condition=None):
+        lad = 0
+        for bijection in self.bijections:
+            z, _lad = bijection.transform_and_log_abs_det_jacobian(z, condition)
+            lad += _lad
+        return z, lad
+
+    def inverse(self, x, condition=None):
+        for bijection in self.bijections[::-1]:
+            x = bijection.inverse(x, condition)
+        return x
+
+    def inverse_and_log_abs_det_jacobian(self, x, condition=None):
+        lad = 0
+        for bijection in self.bijections[::-1]:
+            x, _lad = bijection.inverse_and_log_abs_det_jacobian(x, condition)
+            lad += _lad
+        return x, lad
