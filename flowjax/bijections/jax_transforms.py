@@ -1,9 +1,11 @@
 from functools import partial
 import equinox as eqx
+import jax
 from flowjax.bijections import Bijection
-from jax.lax import scan
-from typing import Any, Tuple
-
+from jax.lax import scan, switch
+from typing import Any, Tuple, Sequence
+import jax.numpy as jnp
+from flowjax.utils import get_ravelled_bijection_constructor
 
 class Vmap(Bijection):
     """Expand the dimension of a bijection by vmapping. By default, we vmap over both the
@@ -33,7 +35,6 @@ class Vmap(Bijection):
 
     def __init__(self, bijection: Bijection, shape: Tuple[int], **kwargs):
         """
-        
 
         Args:
             bijection (Bijection): Bijection. If vmapping over the bijection, the array leaves
@@ -82,6 +83,15 @@ class Vmap(Bijection):
         for _ in range(self.ndim_to_add):
             f = eqx.filter_vmap(f, **self.kwargs)
         return f
+
+
+def get_vmapped_bijection(bijection, dim):
+    """
+    Converts a scalar bijection to a vmapped bijection of shape (dim,)
+    """
+    constructor, initial_params = get_ravelled_bijection_constructor(bijection)
+    params_per_dim = jnp.zeros((dim, initial_params.size))
+    return Vmap(eqx.filter_vmap(constructor)(params_per_dim), (dim,))
 
 
 class Scan(Bijection):
