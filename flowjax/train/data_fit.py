@@ -50,6 +50,7 @@ def fit_to_data(
         show_progress (bool, optional): Whether to show progress bar. Defaults to True.
     """
     static_filter_spec = jtu.tree_map(lambda x: filter_spec(x), dist)
+
     @eqx.filter_jit
     def loss_fn(dist, x, condition=None):
         return -dist.log_prob(x, condition).mean()
