@@ -1,9 +1,10 @@
 from abc import ABC, abstractmethod
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, Sequence
 
 import equinox as eqx
 import jax.numpy as jnp
 
+import jax
 import jax.random as jr
 from jax.scipy import stats as jstats
 
@@ -265,7 +266,7 @@ class JointIndepdendant(Distribution):
         for dim, dist in enumerate(dists):
             self.distributions[dim] = dist
 
-    def sample(self, key: KeyArray, condition: Optional[Array] = None, n: int = None):
+    def sample(self, key: jr.KeyArray, condition: Optional[Array] = None, n: int = None):
         keys = random.split(key, len(self.distributions))
         return jnp.hstack([
             dist.sample(keys[dim], n=n).reshape(-1, 1)
@@ -281,7 +282,7 @@ class JointIndepdendant(Distribution):
     def _log_prob(self, x: Array, condition: Optional[Array] = None):
         pass
 
-    def _sample(self, key: KeyArray, condition: Optional[Array] = None):
+    def _sample(self, key: jr.KeyArray, condition: Optional[Array] = None):
         pass
 
 
@@ -329,6 +330,9 @@ class Transformed(Distribution):
         )
 
     def _log_prob(self, x: Array, condition: Optional[Array] = None):
+        """
+        _log_prob is a function (dim + cond_dim) -> R
+        """
         z, log_abs_det = self.bijection.inverse_and_log_abs_det_jacobian(x, condition)
         p_z = self.base_dist._log_prob(z, condition)
         return p_z + log_abs_det
@@ -358,10 +362,7 @@ class StandardNormal(Distribution):
         self.cond_shape = None
 
     def _log_prob(self, x: Array, condition: Optional[Array] = None):
-        return jnp.clip(
-            jstats.norm.logpdf(x).sum(),
-            a_min=jnp.log(1e-37)
-        )
+        return jstats.norm.logpdf(x).sum()
 
     def _sample(self, key: jr.KeyArray, condition: Optional[Array] = None):
         return jr.normal(key, self.shape)
@@ -397,7 +398,18 @@ class Normal(Transformed):
         return self.bijection.scale
 
 
-class _StandardUniform(Distribution):
+class HalfNormal(Distribution):
+    def __init__(self):
+        self.shape = ()
+        self.cond_shape = None
+
+    def _log_prob(self, x: Array, condition: Optional[Array] = None):
+        return jstats.norm.logpdf(jnp.abs(x)) + jnp.log(2)
+
+    def _sample(self, key: jr.KeyArray, condition: Optional[Array] = None):
+        return jnp.abs(jr.normal(key))
+        
+class StandardUniform(Distribution):
     """
     Implements a standard independent Uniform distribution, ie X ~ Uniform([0, 1]^dim).
     """
@@ -413,15 +425,11 @@ class _StandardUniform(Distribution):
         return jr.uniform(key, shape=self.shape)
 
 
-
-
 class Uniform(Transformed):
     """
     Implements an independent uniform distribution
     between min and max for each dimension. `minval` and `maxval` should be broadcastable.
     """
-    loc: Array
-    scale: Array
     def __init__(self, minval: Array, maxval: Array, fix: bool=False):
         """
         Args:
@@ -435,20 +443,9 @@ class Uniform(Transformed):
             jnp.all(maxval >= minval), "Minimums must be less than the maximums."
         )
 
-        base_dist = _StandardUniform(self.shape)
+        base_dist = StandardUniform(self.shape)
         bijection = Affine(loc=minval, scale=maxval - minval)
         super().__init__(base_dist, bijection)
-
-    @property
-    def minval(self):
-        return self.loc
-
-    @property
-    def maxval(self):
-        return self.loc + self.scale
-
-    def quantile(self, u):
-        return (u  * (self.maxval - self.minval)) + self.minval
 
 
 class _StandardGumbel(Distribution):
@@ -553,6 +550,8 @@ class _StandardStudentT(Distribution):
     """
     Implements student T distribution with specified degrees of freedom.
     """
+    MIN_DF = 1e-6
+    MAX_DF = 1e4
     log_df: Array
     def __init__(self, df: Array):
         self.shape = df.shape
@@ -567,7 +566,7 @@ class _StandardStudentT(Distribution):
 
     @property
     def df(self):
-        return jnp.exp(self.log_df)
+        return jnp.clip(jnp.exp(self.log_df), self.MIN_DF, self.MAX_DF)
 
 
 class StudentT(Transformed):
@@ -602,38 +601,6 @@ class StudentT(Transformed):
         return self.base_dist.df
 
 
-class TwoSidedGPD(Distribution):
-    neg_tail: float
-    pos_tail: float
-    dist: Distribution
-    def __init__(self, dim, neg_tail=1., pos_tail=1.):
-        self.dim = dim
-        self.cond_dim = 0
-        self.neg_tail = neg_tail
-        self.pos_tail = pos_tail
-        self.dist = Transformed(
-            base_dist=Uniform(1, -1, 1), 
-            bijection=Fixed(
-                TailTransformation(None, None), 
-                jnp.array([pos_tail]), jnp.array([neg_tail])
-            )
-        )
-
-    def _log_prob(self, x: Array, condition: Optional[Array] = None):
-        return self.dist._log_prob(x)
-
-    def _sample(self, key: KeyArray, condition: Optional[Array] = None):
-        return self.dist._sample(key)
-
-    def __repr__(self):
-        return (
-            '<FJ TwoSideGPD('
-            f'neg_tail={self.neg_tail:.2f} | '
-            f'pos_tail={self.pos_tail:.2f} | '
-            ')>'
-        )
-
-
 class HalfStudentT(Distribution):
     unc_df: Array
     def __init__(self, dim, df=1.):
@@ -647,9 +614,9 @@ class HalfStudentT(Distribution):
             a_min=jnp.log(1e-37)
         ) 
 
-    def _sample(self, key: KeyArray, condition: Optional[Array] = None):
+    def _sample(self, key: jr.KeyArray, condition: Optional[Array] = None):
         df = jnp.exp(self.unc_df)
-        beta = random.beta(key, 0.5 * df, 0.5, shape=(self.dim,))
+        beta = jr.beta(key, 0.5 * df, 0.5, shape=(self.dim,))
         x = jnp.sqrt(df / beta - df)
         return x
 
@@ -658,51 +625,45 @@ class NealsFunnel(Distribution):
     MIN_STD = 1e-10
     base_std: Array
     funnel_scale: float
-    def __init__(self, base_std, funnel_scale=0.5):
+    def __init__(self, dim=2, base_std=1., funnel_scale=0.5):
+        assert dim > 1, "Neal's funnel is only defined for dim > 1!"
         self.base_std = jnp.array([base_std])
         self.funnel_scale = funnel_scale
-        self.dim = 2
-        self.cond_dim = 0
+
+        self.shape = (dim,)
+        self.cond_shape = None
 
     def _log_prob(self, x, condition=None):
         x_1 = x[0].reshape(1)
-        x_2 = x[1].reshape(1)
-
+        std = jnp.clip(jnp.exp(self.funnel_scale * x_1), self.MIN_STD)
         log_p_x_1 = Normal(jnp.array([0]), self.base_std).log_prob(x_1)
-        log_p_x_2 = Normal(
-            jnp.array([0]), 
-            jnp.clip(jnp.exp(self.funnel_scale * x_1), self.MIN_STD)
-        ).log_prob(x_2)
-
-        return log_p_x_1 + log_p_x_2
+        log_p_x_rest = Normal(
+            jnp.zeros_like(x[1:]), std
+        ).log_prob(x[1:]).sum()
+        return log_p_x_1 + log_p_x_rest
 
     def _sample(self, key, condition=None):
-        key_1, key_2 = random.split(key)
-        x_1 = Normal(jnp.array([0]), self.base_std).sample(key_1)
-        x_2 = Normal(0, jnp.exp(self.funnel_scale * x_1)).sample(key_2)
+        key_1, key_2 = jr.split(key)
+        x_1 = jr.normal(key_1) * self.base_std
+        std = jnp.exp(self.funnel_scale * x_1)
+        x_2 = jr.normal(key_2, (self.shape[0] - 1,)) * std
         return jnp.hstack([x_1, x_2])
 
 
-class DepStut(Distribution):
-    base_df: Array
-    def __init__(self, base_df):
-        self.base_df = jnp.array([base_df])
-        self.dim = 2
-        self.cond_dim = 0
+class IndependentJoint(Distribution):
+    distributions: Sequence[Distribution]
+    dims: Array
+    def __init__(self, distributions):
+        self.shape = (len(distributions),)
+        self.cond_shape = None
+        self.distributions = distributions
+        self.dims = jnp.arange(self.shape[0])
+ 
+    def _log_prob(self, x: Array, condition: Optional[Array] = None):
+        log_probs = [getattr(dist, '_log_prob') for dist in self.distributions]
+        return jax.vmap(lambda ix, x: jax.lax.switch(ix, log_probs, x))(self.dims, x).sum()
 
-    def _log_prob(self, x, condition=None):
-        x_1 = x[0].reshape(1)
-        x_2 = x[1].reshape(1)
-
-        log_p_x_1 = _StandardStudentT(self.base_df).log_prob(x_1)
-        x_2_df = 1. + 10. * jax.nn.sigmoid(x_1)
-        log_p_x_2 = _StandardStudentT(x_2_df).log_prob(x_2)
-
-        return log_p_x_1 + log_p_x_2
-
-    def _sample(self, key, condition=None):
-        key_1, key_2 = random.split(key)
-        x_1 = _StandardStudentT(self.base_df).sample(key_1)
-        x_2_df = 1. + 10. * jax.nn.sigmoid(x_1)
-        x_2 = _StandardStudentT(x_2_df).sample(key_2)
-        return jnp.hstack([x_1, x_2])
+    def _sample(self, key, condition: Optional[Array] = None):
+        samplers = [getattr(dist, '_sample') for dist in self.distributions]
+        keys = jr.split(key, self.shape[0])
+        return jax.vmap(lambda ix, key: jax.lax.switch(ix, samplers, key))(self.dims, keys)
