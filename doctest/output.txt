@@ -1,0 +1,33 @@
+Results of doctest builder run on 2023-05-16 08:55:57
+=====================================================
+
+Document: api/bijections
+------------------------
+1 items passed all tests:
+  10 tests in default
+10 tests in 1 items.
+10 passed and 0 failed.
+Test passed.
+
+Document: api/distributions
+---------------------------
+1 items passed all tests:
+  21 tests in default
+21 tests in 1 items.
+21 passed and 0 failed.
+Test passed.
+
+Document: faq
+-------------
+1 items passed all tests:
+  18 tests in default
+18 tests in 1 items.
+18 passed and 0 failed.
+Test passed.
+
+Doctest summary
+===============
+   49 tests
+    0 failures in tests
+    0 failures in setup code
+    0 failures in cleanup code

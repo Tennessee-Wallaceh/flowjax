@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>flowjax.train.variational_fit &mdash; FlowJax v9.0.0 documentation</title>
+      <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/copybutton.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/style.css" type="text/css" />
+  <!--[if lt IE 9]>
+    <script src="../../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
+        <script src="../../../_static/doctools.js"></script>
+        <script src="../../../_static/sphinx_highlight.js"></script>
+        <script src="../../../_static/clipboard.min.js"></script>
+        <script src="../../../_static/copybutton.js"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../index.html" class="icon icon-home">
+            FlowJax
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Examples</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples/unconditional.html">Unconditional density estmation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples/conditional.html">Conditional density estimation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples/variational_inference.html">Variational inference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples/bounded.html">Bounded flows</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">API</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../api/bijections.html">Bijections</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api/distributions.html">Distributions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api/flows.html">Flows</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api/training.html">Training</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Miscellaneous</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../faq.html">FAQ</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">FlowJax</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">flowjax.train.variational_fit</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for flowjax.train.variational_fit</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Basic training script for fitting a flow using variational inference.&quot;&quot;&quot;</span>
+<span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Callable</span>
+
+<span class="kn">import</span> <span class="nn">equinox</span> <span class="k">as</span> <span class="nn">eqx</span>
+<span class="kn">import</span> <span class="nn">jax.random</span> <span class="k">as</span> <span class="nn">jr</span>
+<span class="kn">import</span> <span class="nn">optax</span>
+<span class="kn">from</span> <span class="nn">jax</span> <span class="kn">import</span> <span class="n">Array</span>
+<span class="kn">from</span> <span class="nn">tqdm</span> <span class="kn">import</span> <span class="n">tqdm</span>
+
+<span class="kn">from</span> <span class="nn">flowjax.distributions</span> <span class="kn">import</span> <span class="n">Distribution</span>
+
+<span class="n">PyTree</span> <span class="o">=</span> <span class="n">Any</span>
+
+
+<span class="k">def</span> <span class="nf">elbo_loss</span><span class="p">(</span>
+    <span class="n">dist</span><span class="p">:</span> <span class="n">Distribution</span><span class="p">,</span>
+    <span class="n">target</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">Array</span><span class="p">],</span> <span class="n">Array</span><span class="p">],</span>
+    <span class="n">key</span><span class="p">:</span> <span class="n">jr</span><span class="o">.</span><span class="n">KeyArray</span><span class="p">,</span>
+    <span class="n">num_samples</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Array</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;The evidence lower bound loss function.&quot;&quot;&quot;</span>
+    <span class="n">samples</span><span class="p">,</span> <span class="n">approx_density</span> <span class="o">=</span> <span class="n">dist</span><span class="o">.</span><span class="n">sample_and_log_prob</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="p">(</span><span class="n">num_samples</span><span class="p">,))</span>
+    <span class="n">target_density</span> <span class="o">=</span> <span class="n">target</span><span class="p">(</span><span class="n">samples</span><span class="p">)</span>
+    <span class="n">losses</span> <span class="o">=</span> <span class="n">approx_density</span> <span class="o">-</span> <span class="n">target_density</span>
+    <span class="k">return</span> <span class="n">losses</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+
+
+<div class="viewcode-block" id="fit_to_variational_target"><a class="viewcode-back" href="../../../api/training.html#flowjax.train.fit_to_variational_target">[docs]</a><span class="k">def</span> <span class="nf">fit_to_variational_target</span><span class="p">(</span>
+    <span class="n">key</span><span class="p">:</span> <span class="n">jr</span><span class="o">.</span><span class="n">KeyArray</span><span class="p">,</span>
+    <span class="n">dist</span><span class="p">:</span> <span class="n">Distribution</span><span class="p">,</span>
+    <span class="n">target</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">Array</span><span class="p">],</span> <span class="n">Array</span><span class="p">],</span>
+    <span class="n">loss_fn</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">Distribution</span><span class="p">,</span> <span class="n">Callable</span><span class="p">,</span> <span class="n">jr</span><span class="o">.</span><span class="n">KeyArray</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span> <span class="n">Array</span><span class="p">]</span> <span class="o">=</span> <span class="n">elbo_loss</span><span class="p">,</span>
+    <span class="n">steps</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">100</span><span class="p">,</span>
+    <span class="n">samples_per_step</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">500</span><span class="p">,</span>
+    <span class="n">learning_rate</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">5e-4</span><span class="p">,</span>
+    <span class="n">clip_norm</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.5</span><span class="p">,</span>
+    <span class="n">optimizer</span><span class="p">:</span> <span class="n">optax</span><span class="o">.</span><span class="n">GradientTransformation</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">filter_spec</span><span class="p">:</span> <span class="n">Callable</span> <span class="o">|</span> <span class="n">PyTree</span> <span class="o">=</span> <span class="n">eqx</span><span class="o">.</span><span class="n">is_inexact_array</span><span class="p">,</span>
+    <span class="n">show_progress</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+<span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Train a distribution (e.g. a flow) by variational inference to a target</span>
+<span class="sd">    (e.g. an unnormalized density).</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        key (jr.KeyArray): Jax PRNGKey.</span>
+<span class="sd">        dist (Distribution): Distribution object, trainable parameters are found</span>
+<span class="sd">            using equinox.is_inexact_array.</span>
+<span class="sd">        target (Callable[[Array], Array]): The variational target (this is usually the unormalized log</span>
+<span class="sd">            posterior)</span>
+<span class="sd">        loss_fn (Callable[[Distribution, Callable, jr.KeyArray, int], Array]): The loss</span>
+<span class="sd">            function to optimize. The loss function should take the distribution to train,</span>
+<span class="sd">            the target function, key and an int (number of samples) and map to a scalar</span>
+<span class="sd">            loss. Defaults to elbo_loss.</span>
+<span class="sd">        steps (int): The number of training steps to run. Defaults to 100.</span>
+<span class="sd">        samples_per_step (int): number of samples to use at each step.</span>
+<span class="sd">            Defaults to 500.</span>
+<span class="sd">        learning_rate (float): Adam learning rate. Defaults to 5e-4.</span>
+<span class="sd">        clip_norm (float): Maximum gradient norm before clipping occurs.</span>
+<span class="sd">            Defaults to 0.5.</span>
+<span class="sd">        optimizer (optax.GradientTransformation | None): Optax optimizer. If provided,</span>
+<span class="sd">            this overrides the default Adam optimizer, and the learning_rate and</span>
+<span class="sd">            clip_norm arguments are ignored. Defaults to None.</span>
+<span class="sd">        filter_spec (Callable | PyTree): Equinox `filter_spec` for</span>
+<span class="sd">            specifying trainable parameters. Either a callable `leaf -&gt; bool`, or a</span>
+<span class="sd">            PyTree with prefix structure matching `dist` with True/False values.</span>
+<span class="sd">            Defaults to `eqx.is_inexact_array`.</span>
+<span class="sd">        show_progress (bool): Whether to show progress bar. Defaults to True.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">optimizer</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">optimizer</span> <span class="o">=</span> <span class="n">optimizer</span> <span class="o">=</span> <span class="n">optax</span><span class="o">.</span><span class="n">chain</span><span class="p">(</span>
+            <span class="n">optax</span><span class="o">.</span><span class="n">clip_by_global_norm</span><span class="p">(</span><span class="n">clip_norm</span><span class="p">),</span>
+            <span class="n">optax</span><span class="o">.</span><span class="n">adam</span><span class="p">(</span><span class="n">learning_rate</span><span class="o">=</span><span class="n">learning_rate</span><span class="p">),</span>
+        <span class="p">)</span>
+
+    <span class="nd">@eqx</span><span class="o">.</span><span class="n">filter_jit</span>
+    <span class="k">def</span> <span class="nf">step</span><span class="p">(</span><span class="n">dist</span><span class="p">,</span> <span class="n">target</span><span class="p">,</span> <span class="n">key</span><span class="p">,</span> <span class="n">optimizer</span><span class="p">,</span> <span class="n">opt_state</span><span class="p">):</span>
+        <span class="nd">@eqx</span><span class="o">.</span><span class="n">filter_value_and_grad</span>
+        <span class="k">def</span> <span class="nf">loss_val_and_grad</span><span class="p">(</span>
+            <span class="n">dist_trainable</span><span class="p">,</span> <span class="n">dist_static</span><span class="p">,</span> <span class="n">target</span><span class="p">,</span> <span class="n">key</span><span class="p">,</span> <span class="n">samples_per_step</span>
+        <span class="p">):</span>
+            <span class="n">dist</span> <span class="o">=</span> <span class="n">eqx</span><span class="o">.</span><span class="n">combine</span><span class="p">(</span><span class="n">dist_trainable</span><span class="p">,</span> <span class="n">dist_static</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">loss_fn</span><span class="p">(</span><span class="n">dist</span><span class="p">,</span> <span class="n">target</span><span class="p">,</span> <span class="n">key</span><span class="p">,</span> <span class="n">samples_per_step</span><span class="p">)</span>
+
+        <span class="n">dist_trainable</span><span class="p">,</span> <span class="n">dist_static</span> <span class="o">=</span> <span class="n">eqx</span><span class="o">.</span><span class="n">partition</span><span class="p">(</span><span class="n">dist</span><span class="p">,</span> <span class="n">filter_spec</span><span class="p">)</span>
+        <span class="n">loss_val</span><span class="p">,</span> <span class="n">grads</span> <span class="o">=</span> <span class="n">loss_val_and_grad</span><span class="p">(</span>
+            <span class="n">dist_trainable</span><span class="p">,</span> <span class="n">dist_static</span><span class="p">,</span> <span class="n">target</span><span class="p">,</span> <span class="n">key</span><span class="p">,</span> <span class="n">samples_per_step</span>
+        <span class="p">)</span>
+        <span class="n">updates</span><span class="p">,</span> <span class="n">opt_state</span> <span class="o">=</span> <span class="n">optimizer</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">grads</span><span class="p">,</span> <span class="n">opt_state</span><span class="p">)</span>
+        <span class="n">dist</span> <span class="o">=</span> <span class="n">eqx</span><span class="o">.</span><span class="n">apply_updates</span><span class="p">(</span><span class="n">dist</span><span class="p">,</span> <span class="n">updates</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">dist</span><span class="p">,</span> <span class="n">opt_state</span><span class="p">,</span> <span class="n">loss_val</span>
+
+    <span class="n">dist_trainable</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">eqx</span><span class="o">.</span><span class="n">partition</span><span class="p">(</span><span class="n">dist</span><span class="p">,</span> <span class="n">filter_spec</span><span class="p">)</span>  <span class="c1"># type: ignore</span>
+    <span class="n">opt_state</span> <span class="o">=</span> <span class="n">optimizer</span><span class="o">.</span><span class="n">init</span><span class="p">(</span><span class="n">dist_trainable</span><span class="p">)</span>
+
+    <span class="n">losses</span> <span class="o">=</span> <span class="p">[]</span>
+
+    <span class="n">loop</span> <span class="o">=</span> <span class="n">tqdm</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="n">steps</span><span class="p">),</span> <span class="n">disable</span><span class="o">=</span><span class="ow">not</span> <span class="n">show_progress</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">loop</span><span class="p">:</span>
+        <span class="n">key</span><span class="p">,</span> <span class="n">subkey</span> <span class="o">=</span> <span class="n">jr</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
+        <span class="n">dist</span><span class="p">,</span> <span class="n">opt_state</span><span class="p">,</span> <span class="n">loss</span> <span class="o">=</span> <span class="n">step</span><span class="p">(</span><span class="n">dist</span><span class="p">,</span> <span class="n">target</span><span class="p">,</span> <span class="n">subkey</span><span class="p">,</span> <span class="n">optimizer</span><span class="p">,</span> <span class="n">opt_state</span><span class="p">)</span>  <span class="c1"># type: ignore</span>
+
+        <span class="n">losses</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">loss</span><span class="o">.</span><span class="n">item</span><span class="p">())</span>
+        <span class="n">loop</span><span class="o">.</span><span class="n">set_postfix</span><span class="p">({</span><span class="s2">&quot;loss&quot;</span><span class="p">:</span> <span class="n">losses</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]})</span>
+
+    <span class="k">return</span> <span class="n">dist</span><span class="p">,</span> <span class="n">losses</span></div>
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2022, Daniel Ward.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

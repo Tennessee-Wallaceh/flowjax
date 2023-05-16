@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>flowjax.train.data_fit &mdash; FlowJax v9.0.0 documentation</title>
+      <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/copybutton.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/style.css" type="text/css" />
+  <!--[if lt IE 9]>
+    <script src="../../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
+        <script src="../../../_static/doctools.js"></script>
+        <script src="../../../_static/sphinx_highlight.js"></script>
+        <script src="../../../_static/clipboard.min.js"></script>
+        <script src="../../../_static/copybutton.js"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../index.html" class="icon icon-home">
+            FlowJax
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Examples</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples/unconditional.html">Unconditional density estmation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples/conditional.html">Conditional density estimation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples/variational_inference.html">Variational inference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples/bounded.html">Bounded flows</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">API</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../api/bijections.html">Bijections</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api/distributions.html">Distributions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api/flows.html">Flows</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api/training.html">Training</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Miscellaneous</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../faq.html">FAQ</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">FlowJax</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">flowjax.train.data_fit</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for flowjax.train.data_fit</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Function to fit flows to samples from a distribution.&quot;&quot;&quot;</span>
+<span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Callable</span><span class="p">,</span> <span class="n">Dict</span>
+<span class="kn">import</span> <span class="nn">equinox</span> <span class="k">as</span> <span class="nn">eqx</span>
+<span class="kn">import</span> <span class="nn">jax.numpy</span> <span class="k">as</span> <span class="nn">jnp</span>
+<span class="kn">import</span> <span class="nn">jax.random</span> <span class="k">as</span> <span class="nn">jr</span>
+<span class="kn">import</span> <span class="nn">optax</span>
+<span class="kn">from</span> <span class="nn">jax.typing</span> <span class="kn">import</span> <span class="n">ArrayLike</span>
+<span class="kn">from</span> <span class="nn">tqdm</span> <span class="kn">import</span> <span class="n">tqdm</span>
+
+<span class="kn">from</span> <span class="nn">flowjax.distributions</span> <span class="kn">import</span> <span class="n">Distribution</span>
+<span class="kn">from</span> <span class="nn">flowjax.train.train_utils</span> <span class="kn">import</span> <span class="n">count_fruitless</span><span class="p">,</span> <span class="n">train_val_split</span>
+
+<span class="n">PyTree</span> <span class="o">=</span> <span class="n">Any</span>
+
+
+<div class="viewcode-block" id="fit_to_data"><a class="viewcode-back" href="../../../api/training.html#flowjax.train.fit_to_data">[docs]</a><span class="k">def</span> <span class="nf">fit_to_data</span><span class="p">(</span>
+    <span class="n">key</span><span class="p">:</span> <span class="n">jr</span><span class="o">.</span><span class="n">KeyArray</span><span class="p">,</span>
+    <span class="n">dist</span><span class="p">:</span> <span class="n">Distribution</span><span class="p">,</span>
+    <span class="n">x</span><span class="p">:</span> <span class="n">ArrayLike</span><span class="p">,</span>
+    <span class="n">condition</span><span class="p">:</span> <span class="n">ArrayLike</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">max_epochs</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">50</span><span class="p">,</span>
+    <span class="n">max_patience</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span><span class="p">,</span>
+    <span class="n">batch_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">256</span><span class="p">,</span>
+    <span class="n">val_prop</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.1</span><span class="p">,</span>
+    <span class="n">learning_rate</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">5e-4</span><span class="p">,</span>
+    <span class="n">clip_norm</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.5</span><span class="p">,</span>
+    <span class="n">optimizer</span><span class="p">:</span> <span class="n">optax</span><span class="o">.</span><span class="n">GradientTransformation</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">filter_spec</span><span class="p">:</span> <span class="n">Callable</span> <span class="o">|</span> <span class="n">PyTree</span> <span class="o">=</span> <span class="n">eqx</span><span class="o">.</span><span class="n">is_inexact_array</span><span class="p">,</span>
+    <span class="n">show_progress</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+<span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Train a distribution (e.g. a flow) to samples by maximum likelihood. Note that</span>
+<span class="sd">    the last batch in each epoch is dropped if truncated.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        key (KeyArray): Jax PRNGKey.</span>
+<span class="sd">        dist (Distribution): Distribution object.</span>
+<span class="sd">        x (ArrayLike): Samples from target distribution.</span>
+<span class="sd">        condition (ArrayLike | None): Conditioning variables. Defaults to None.</span>
+<span class="sd">        max_epochs (int): Maximum number of epochs. Defaults to 50.</span>
+<span class="sd">        max_patience (int): Number of consecutive epochs with no validation</span>
+<span class="sd">            loss improvement after which training is terminated. Defaults to 5.</span>
+<span class="sd">        batch_size (int): Batch size. Defaults to 256.</span>
+<span class="sd">        val_prop (float): Proportion of data to use in validation set. Defaults to 0.1.</span>
+<span class="sd">        learning_rate (float): Adam learning rate. Defaults to 5e-4.</span>
+<span class="sd">        clip_norm (float): Maximum gradient norm before clipping occurs. Defaults to 0.5.</span>
+<span class="sd">        optimizer (optax.GradientTransformation): Optax optimizer. If provided, this</span>
+<span class="sd">            overrides the default Adam optimizer, and the learning_rate and clip_norm</span>
+<span class="sd">            arguments are ignored. Defaults to None.</span>
+<span class="sd">        filter_spec (Callable | PyTree): Equinox `filter_spec` for</span>
+<span class="sd">            specifying trainable parameters. Either a callable `leaf -&gt; bool`, or a</span>
+<span class="sd">            PyTree with prefix structure matching `dist` with True/False values.</span>
+<span class="sd">            Defaults to `eqx.is_inexact_array`.</span>
+<span class="sd">        show_progress (bool): Whether to show progress bar. Defaults to True.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">x</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">condition</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">condition</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">condition</span><span class="p">)</span>
+
+    <span class="nd">@eqx</span><span class="o">.</span><span class="n">filter_jit</span>
+    <span class="k">def</span> <span class="nf">loss_fn</span><span class="p">(</span><span class="n">dist_trainable</span><span class="p">,</span> <span class="n">dist_static</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">condition</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">dist</span> <span class="o">=</span> <span class="n">eqx</span><span class="o">.</span><span class="n">combine</span><span class="p">(</span><span class="n">dist_trainable</span><span class="p">,</span> <span class="n">dist_static</span><span class="p">)</span>
+        <span class="k">return</span> <span class="o">-</span><span class="n">dist</span><span class="o">.</span><span class="n">log_prob</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+
+    <span class="nd">@eqx</span><span class="o">.</span><span class="n">filter_jit</span>
+    <span class="k">def</span> <span class="nf">step</span><span class="p">(</span><span class="n">dist</span><span class="p">,</span> <span class="n">optimizer</span><span class="p">,</span> <span class="n">opt_state</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">condition</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="n">dist_trainable</span><span class="p">,</span> <span class="n">dist_static</span> <span class="o">=</span> <span class="n">eqx</span><span class="o">.</span><span class="n">partition</span><span class="p">(</span><span class="n">dist</span><span class="p">,</span> <span class="n">filter_spec</span><span class="p">)</span>
+        <span class="n">loss_val</span><span class="p">,</span> <span class="n">grads</span> <span class="o">=</span> <span class="n">eqx</span><span class="o">.</span><span class="n">filter_value_and_grad</span><span class="p">(</span><span class="n">loss_fn</span><span class="p">)(</span>
+            <span class="n">dist_trainable</span><span class="p">,</span> <span class="n">dist_static</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">condition</span>
+        <span class="p">)</span>
+        <span class="n">updates</span><span class="p">,</span> <span class="n">opt_state</span> <span class="o">=</span> <span class="n">optimizer</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">grads</span><span class="p">,</span> <span class="n">opt_state</span><span class="p">)</span>
+        <span class="n">dist</span> <span class="o">=</span> <span class="n">eqx</span><span class="o">.</span><span class="n">apply_updates</span><span class="p">(</span><span class="n">dist</span><span class="p">,</span> <span class="n">updates</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">dist</span><span class="p">,</span> <span class="n">opt_state</span><span class="p">,</span> <span class="n">loss_val</span>
+
+    <span class="k">if</span> <span class="n">optimizer</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">optimizer</span> <span class="o">=</span> <span class="n">optax</span><span class="o">.</span><span class="n">chain</span><span class="p">(</span>
+            <span class="n">optax</span><span class="o">.</span><span class="n">clip_by_global_norm</span><span class="p">(</span><span class="n">clip_norm</span><span class="p">),</span>
+            <span class="n">optax</span><span class="o">.</span><span class="n">adam</span><span class="p">(</span><span class="n">learning_rate</span><span class="o">=</span><span class="n">learning_rate</span><span class="p">),</span>
+        <span class="p">)</span>
+
+    <span class="n">best_params</span><span class="p">,</span> <span class="n">static</span> <span class="o">=</span> <span class="n">eqx</span><span class="o">.</span><span class="n">partition</span><span class="p">(</span><span class="n">dist</span><span class="p">,</span> <span class="n">filter_spec</span><span class="p">)</span>  <span class="c1"># type: ignore</span>
+    <span class="n">opt_state</span> <span class="o">=</span> <span class="n">optimizer</span><span class="o">.</span><span class="n">init</span><span class="p">(</span><span class="n">best_params</span><span class="p">)</span>
+
+    <span class="n">key</span><span class="p">,</span> <span class="n">train_val_split_key</span> <span class="o">=</span> <span class="n">jr</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
+
+    <span class="n">inputs</span> <span class="o">=</span> <span class="p">(</span><span class="n">x</span><span class="p">,)</span> <span class="k">if</span> <span class="n">condition</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>
+    <span class="n">train_args</span><span class="p">,</span> <span class="n">val_args</span> <span class="o">=</span> <span class="n">train_val_split</span><span class="p">(</span>
+        <span class="n">train_val_split_key</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">val_prop</span><span class="o">=</span><span class="n">val_prop</span>
+    <span class="p">)</span>
+    <span class="n">train_len</span><span class="p">,</span> <span class="n">val_len</span> <span class="o">=</span> <span class="n">train_args</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">val_args</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="k">if</span> <span class="n">batch_size</span> <span class="o">&gt;</span> <span class="n">train_len</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">&quot;The batch size (</span><span class="si">{</span><span class="n">batch_size</span><span class="si">}</span><span class="s2">) cannot be greater than the train set size &quot;</span>
+            <span class="sa">f</span><span class="s2">&quot;(</span><span class="si">{</span><span class="n">train_len</span><span class="si">}</span><span class="s2">).&quot;</span>
+        <span class="p">)</span>
+
+    <span class="n">losses</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;train&quot;</span><span class="p">:</span> <span class="p">[],</span> <span class="s2">&quot;val&quot;</span><span class="p">:</span> <span class="p">[]}</span>  <span class="c1"># type: Dict[str, list[float]]</span>
+
+    <span class="n">loop</span> <span class="o">=</span> <span class="n">tqdm</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="n">max_epochs</span><span class="p">),</span> <span class="n">disable</span><span class="o">=</span><span class="ow">not</span> <span class="n">show_progress</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">loop</span><span class="p">:</span>
+        <span class="n">key</span><span class="p">,</span> <span class="n">subkey</span> <span class="o">=</span> <span class="n">jr</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
+        <span class="n">permutation</span> <span class="o">=</span> <span class="n">jr</span><span class="o">.</span><span class="n">permutation</span><span class="p">(</span><span class="n">subkey</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">train_len</span><span class="p">))</span>
+        <span class="n">train_args</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">a</span><span class="p">[</span><span class="n">permutation</span><span class="p">]</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">train_args</span><span class="p">)</span>
+
+        <span class="n">epoch_train_loss</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="n">batch_start_idxs</span> <span class="o">=</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">train_len</span> <span class="o">-</span> <span class="n">batch_size</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">batch_size</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">batch_start_idxs</span><span class="p">:</span>
+            <span class="n">batch</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">a</span><span class="p">[</span><span class="n">i</span> <span class="p">:</span> <span class="n">i</span> <span class="o">+</span> <span class="n">batch_size</span><span class="p">]</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">train_args</span><span class="p">)</span>
+            <span class="n">dist</span><span class="p">,</span> <span class="n">opt_state</span><span class="p">,</span> <span class="n">loss_i</span> <span class="o">=</span> <span class="n">step</span><span class="p">(</span><span class="n">dist</span><span class="p">,</span> <span class="n">optimizer</span><span class="p">,</span> <span class="n">opt_state</span><span class="p">,</span> <span class="o">*</span><span class="n">batch</span><span class="p">)</span>
+            <span class="n">epoch_train_loss</span> <span class="o">+=</span> <span class="n">loss_i</span><span class="o">.</span><span class="n">item</span><span class="p">()</span> <span class="o">/</span> <span class="nb">len</span><span class="p">(</span><span class="n">batch_start_idxs</span><span class="p">)</span>
+
+        <span class="n">epoch_val_loss</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="n">batch_start_idxs</span> <span class="o">=</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">val_len</span> <span class="o">-</span> <span class="n">batch_size</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">batch_size</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">batch_start_idxs</span><span class="p">:</span>
+            <span class="n">batch</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">a</span><span class="p">[</span><span class="n">i</span> <span class="p">:</span> <span class="n">i</span> <span class="o">+</span> <span class="n">batch_size</span><span class="p">]</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">val_args</span><span class="p">)</span>
+
+            <span class="n">epoch_val_loss</span> <span class="o">+=</span> <span class="n">loss_fn</span><span class="p">(</span>
+                <span class="o">*</span><span class="n">eqx</span><span class="o">.</span><span class="n">partition</span><span class="p">(</span><span class="n">dist</span><span class="p">,</span> <span class="n">filter_spec</span><span class="p">),</span> <span class="o">*</span><span class="n">batch</span>
+            <span class="p">)</span><span class="o">.</span><span class="n">item</span><span class="p">()</span> <span class="o">/</span> <span class="nb">len</span><span class="p">(</span><span class="n">batch_start_idxs</span><span class="p">)</span>
+
+        <span class="n">losses</span><span class="p">[</span><span class="s2">&quot;train&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">epoch_train_loss</span><span class="p">)</span>
+        <span class="n">losses</span><span class="p">[</span><span class="s2">&quot;val&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">epoch_val_loss</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">epoch_val_loss</span> <span class="o">==</span> <span class="nb">min</span><span class="p">(</span><span class="n">losses</span><span class="p">[</span><span class="s2">&quot;val&quot;</span><span class="p">]):</span>
+            <span class="n">best_params</span> <span class="o">=</span> <span class="n">eqx</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">dist</span><span class="p">,</span> <span class="n">filter_spec</span><span class="p">)</span>
+
+        <span class="k">elif</span> <span class="n">count_fruitless</span><span class="p">(</span><span class="n">losses</span><span class="p">[</span><span class="s2">&quot;val&quot;</span><span class="p">])</span> <span class="o">&gt;</span> <span class="n">max_patience</span><span class="p">:</span>
+            <span class="n">loop</span><span class="o">.</span><span class="n">set_postfix_str</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">loop</span><span class="o">.</span><span class="n">postfix</span><span class="si">}</span><span class="s2"> (Max patience reached)&quot;</span><span class="p">)</span>
+            <span class="k">break</span>
+
+        <span class="n">loop</span><span class="o">.</span><span class="n">set_postfix</span><span class="p">({</span><span class="n">k</span><span class="p">:</span> <span class="n">v</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">losses</span><span class="o">.</span><span class="n">items</span><span class="p">()})</span>
+
+    <span class="n">dist</span> <span class="o">=</span> <span class="n">eqx</span><span class="o">.</span><span class="n">combine</span><span class="p">(</span><span class="n">best_params</span><span class="p">,</span> <span class="n">static</span><span class="p">)</span>  <span class="c1"># type: ignore</span>
+    <span class="k">return</span> <span class="n">dist</span><span class="p">,</span> <span class="n">losses</span></div>
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2022, Daniel Ward.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

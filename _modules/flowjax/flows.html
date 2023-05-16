@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>flowjax.flows &mdash; FlowJax v9.0.0 documentation</title>
+      <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/style.css" type="text/css" />
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
+        <script src="../../_static/doctools.js"></script>
+        <script src="../../_static/sphinx_highlight.js"></script>
+        <script src="../../_static/clipboard.min.js"></script>
+        <script src="../../_static/copybutton.js"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            FlowJax
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Examples</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../examples/unconditional.html">Unconditional density estmation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples/conditional.html">Conditional density estimation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples/variational_inference.html">Variational inference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples/bounded.html">Bounded flows</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">API</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../api/bijections.html">Bijections</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api/distributions.html">Distributions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api/flows.html">Flows</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api/training.html">Training</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Miscellaneous</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../faq.html">FAQ</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">FlowJax</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">flowjax.flows</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for flowjax.flows</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Premade versions of common flow architetctures from ``flowjax.flows``.&quot;&quot;&quot;</span>
+<span class="c1"># Note that here although we could chain arbitrary bijections using `Chain`, here,</span>
+<span class="c1"># we generally opt to use `Scan`, which avoids excessive compilation</span>
+<span class="c1"># when the flow layers share the same structure.</span>
+
+<span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Callable</span>
+
+<span class="kn">import</span> <span class="nn">equinox</span> <span class="k">as</span> <span class="nn">eqx</span>
+<span class="kn">import</span> <span class="nn">jax.nn</span> <span class="k">as</span> <span class="nn">jnn</span>
+<span class="kn">import</span> <span class="nn">jax.numpy</span> <span class="k">as</span> <span class="nn">jnp</span>
+<span class="kn">from</span> <span class="nn">jax</span> <span class="kn">import</span> <span class="n">random</span>
+<span class="kn">from</span> <span class="nn">jax.nn.initializers</span> <span class="kn">import</span> <span class="n">glorot_uniform</span>
+<span class="kn">from</span> <span class="nn">jax.random</span> <span class="kn">import</span> <span class="n">KeyArray</span>
+
+<span class="kn">from</span> <span class="nn">flowjax.bijections</span> <span class="kn">import</span> <span class="p">(</span>
+    <span class="n">AdditiveLinearCondition</span><span class="p">,</span>
+    <span class="n">Bijection</span><span class="p">,</span>
+    <span class="n">BlockAutoregressiveNetwork</span><span class="p">,</span>
+    <span class="n">Chain</span><span class="p">,</span>
+    <span class="n">Coupling</span><span class="p">,</span>
+    <span class="n">Flip</span><span class="p">,</span>
+    <span class="n">Invert</span><span class="p">,</span>
+    <span class="n">MaskedAutoregressive</span><span class="p">,</span>
+    <span class="n">Permute</span><span class="p">,</span>
+    <span class="n">RationalQuadraticSpline</span><span class="p">,</span>
+    <span class="n">Scan</span><span class="p">,</span>
+    <span class="n">TanhLinearTails</span><span class="p">,</span>
+    <span class="n">TriangularAffine</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="kn">from</span> <span class="nn">flowjax.distributions</span> <span class="kn">import</span> <span class="n">Distribution</span><span class="p">,</span> <span class="n">Transformed</span>
+
+
+<div class="viewcode-block" id="CouplingFlow"><a class="viewcode-back" href="../../api/flows.html#flowjax.flows.CouplingFlow">[docs]</a><span class="k">class</span> <span class="nc">CouplingFlow</span><span class="p">(</span><span class="n">Transformed</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Coupling flow (https://arxiv.org/abs/1605.08803).&quot;&quot;&quot;</span>
+
+    <span class="n">flow_layers</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">nn_width</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">nn_depth</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">permute_strategy</span><span class="p">:</span> <span class="nb">str</span>
+
+<div class="viewcode-block" id="CouplingFlow.__init__"><a class="viewcode-back" href="../../api/flows.html#flowjax.flows.CouplingFlow.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">key</span><span class="p">:</span> <span class="n">KeyArray</span><span class="p">,</span>
+        <span class="n">base_dist</span><span class="p">:</span> <span class="n">Distribution</span><span class="p">,</span>
+        <span class="n">transformer</span><span class="p">:</span> <span class="n">Bijection</span><span class="p">,</span>
+        <span class="n">cond_dim</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">flow_layers</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">8</span><span class="p">,</span>
+        <span class="n">nn_width</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">40</span><span class="p">,</span>
+        <span class="n">nn_depth</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span>
+        <span class="n">nn_activation</span><span class="p">:</span> <span class="n">Callable</span> <span class="o">=</span> <span class="n">jnn</span><span class="o">.</span><span class="n">relu</span><span class="p">,</span>
+        <span class="n">invert</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Args:</span>
+<span class="sd">            key (KeyArray): Jax PRNGKey.</span>
+<span class="sd">            base_dist (Distribution): Base distribution.</span>
+<span class="sd">            transformer (Bijection): Bijection to be parameterised by conditioner.</span>
+<span class="sd">            cond_dim (int): Dimension of conditioning variables. Defaults to None.</span>
+<span class="sd">            flow_layers (int): Number of coupling layers. Defaults to 5.</span>
+<span class="sd">            nn_width (int): Conditioner hidden layer size. Defaults to 40.</span>
+<span class="sd">            nn_depth (int): Conditioner depth. Defaults to 2.</span>
+<span class="sd">            nn_activation (int): Conditioner activation function. Defaults to jnn.relu.</span>
+<span class="sd">            invert: (bool): Whether to invert the bijection. Broadly, True will</span>
+<span class="sd">                prioritise a faster `inverse` methods, leading to faster `log_prob`,</span>
+<span class="sd">                False will prioritise faster `transform` methods, leading to faster</span>
+<span class="sd">                `sample`. Defaults to True</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">base_dist</span><span class="o">.</span><span class="n">ndim</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Expected base_dist.ndim==1, got </span><span class="si">{</span><span class="n">base_dist</span><span class="o">.</span><span class="n">ndim</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="n">dim</span> <span class="o">=</span> <span class="n">base_dist</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">permute_strategy</span> <span class="o">=</span> <span class="n">_default_permute_strategy</span><span class="p">(</span><span class="n">dim</span><span class="p">)</span>
+
+        <span class="k">def</span> <span class="nf">make_layer</span><span class="p">(</span><span class="n">key</span><span class="p">):</span>  <span class="c1"># coupling layer + permutation</span>
+            <span class="n">c_key</span><span class="p">,</span> <span class="n">p_key</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
+            <span class="n">coupling</span> <span class="o">=</span> <span class="n">Coupling</span><span class="p">(</span>
+                <span class="n">key</span><span class="o">=</span><span class="n">c_key</span><span class="p">,</span>
+                <span class="n">transformer</span><span class="o">=</span><span class="n">transformer</span><span class="p">,</span>
+                <span class="n">untransformed_dim</span><span class="o">=</span><span class="n">dim</span> <span class="o">//</span> <span class="mi">2</span><span class="p">,</span>
+                <span class="n">dim</span><span class="o">=</span><span class="n">dim</span><span class="p">,</span>
+                <span class="n">cond_dim</span><span class="o">=</span><span class="n">cond_dim</span><span class="p">,</span>
+                <span class="n">nn_width</span><span class="o">=</span><span class="n">nn_width</span><span class="p">,</span>
+                <span class="n">nn_depth</span><span class="o">=</span><span class="n">nn_depth</span><span class="p">,</span>
+                <span class="n">nn_activation</span><span class="o">=</span><span class="n">nn_activation</span><span class="p">,</span>
+            <span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">permute_strategy</span> <span class="o">==</span> <span class="s2">&quot;flip&quot;</span><span class="p">:</span>
+                <span class="k">return</span> <span class="n">Chain</span><span class="p">([</span><span class="n">coupling</span><span class="p">,</span> <span class="n">Flip</span><span class="p">((</span><span class="n">dim</span><span class="p">,))])</span>
+            <span class="k">if</span> <span class="n">permute_strategy</span> <span class="o">==</span> <span class="s2">&quot;random&quot;</span><span class="p">:</span>
+                <span class="n">perm</span> <span class="o">=</span> <span class="n">Permute</span><span class="p">(</span><span class="n">random</span><span class="o">.</span><span class="n">permutation</span><span class="p">(</span><span class="n">p_key</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">dim</span><span class="p">)))</span>
+                <span class="k">return</span> <span class="n">Chain</span><span class="p">([</span><span class="n">coupling</span><span class="p">,</span> <span class="n">perm</span><span class="p">])</span>
+            <span class="k">return</span> <span class="n">coupling</span>
+
+        <span class="n">keys</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">flow_layers</span><span class="p">)</span>
+        <span class="n">layers</span> <span class="o">=</span> <span class="n">eqx</span><span class="o">.</span><span class="n">filter_vmap</span><span class="p">(</span><span class="n">make_layer</span><span class="p">)(</span><span class="n">keys</span><span class="p">)</span>
+        <span class="n">bijection</span> <span class="o">=</span> <span class="n">Invert</span><span class="p">(</span><span class="n">Scan</span><span class="p">(</span><span class="n">layers</span><span class="p">))</span> <span class="k">if</span> <span class="n">invert</span> <span class="k">else</span> <span class="n">Scan</span><span class="p">(</span><span class="n">layers</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">nn_width</span> <span class="o">=</span> <span class="n">nn_width</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">nn_depth</span> <span class="o">=</span> <span class="n">nn_depth</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">flow_layers</span> <span class="o">=</span> <span class="n">flow_layers</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">permute_strategy</span> <span class="o">=</span> <span class="n">permute_strategy</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">shape</span> <span class="o">=</span> <span class="p">(</span><span class="n">dim</span><span class="p">,)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span> <span class="o">=</span> <span class="kc">None</span> <span class="k">if</span> <span class="n">cond_dim</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="p">(</span><span class="n">cond_dim</span><span class="p">,)</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">base_dist</span><span class="p">,</span> <span class="n">bijection</span><span class="p">)</span></div></div>
+
+
+<div class="viewcode-block" id="MaskedAutoregressiveFlow"><a class="viewcode-back" href="../../api/flows.html#flowjax.flows.MaskedAutoregressiveFlow">[docs]</a><span class="k">class</span> <span class="nc">MaskedAutoregressiveFlow</span><span class="p">(</span><span class="n">Transformed</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Masked autoregressive flow (https://arxiv.org/abs/1606.04934,</span>
+<span class="sd">    https://arxiv.org/abs/1705.07057v4). Parameterises a transformer with an</span>
+<span class="sd">    autoregressive neural network.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">flow_layers</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">nn_width</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">nn_depth</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">permute_strategy</span><span class="p">:</span> <span class="nb">str</span>
+
+<div class="viewcode-block" id="MaskedAutoregressiveFlow.__init__"><a class="viewcode-back" href="../../api/flows.html#flowjax.flows.MaskedAutoregressiveFlow.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">key</span><span class="p">:</span> <span class="n">KeyArray</span><span class="p">,</span>
+        <span class="n">base_dist</span><span class="p">:</span> <span class="n">Distribution</span><span class="p">,</span>
+        <span class="n">transformer</span><span class="p">:</span> <span class="n">Bijection</span><span class="p">,</span>
+        <span class="n">cond_dim</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">flow_layers</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">8</span><span class="p">,</span>
+        <span class="n">nn_width</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">40</span><span class="p">,</span>
+        <span class="n">nn_depth</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span>
+        <span class="n">nn_activation</span><span class="p">:</span> <span class="n">Callable</span> <span class="o">=</span> <span class="n">jnn</span><span class="o">.</span><span class="n">relu</span><span class="p">,</span>
+        <span class="n">invert</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Args:</span>
+<span class="sd">            key (KeyArray): Random seed.</span>
+<span class="sd">            base_dist (Distribution): Base distribution.</span>
+<span class="sd">            transformer (Bijection): Bijection parameterised by autoregressive network.</span>
+<span class="sd">            cond_dim (int): _description_. Defaults to 0.</span>
+<span class="sd">            flow_layers (int): Number of flow layers. Defaults to 5.</span>
+<span class="sd">            nn_width (int): Number of hidden layers in neural network. Defaults to 40.</span>
+<span class="sd">            nn_depth (int): Depth of neural network. Defaults to 2.</span>
+<span class="sd">            nn_activation (Callable): _description_. Defaults to jnn.relu.</span>
+<span class="sd">            invert (bool): Whether to invert the bijection. Broadly, True will</span>
+<span class="sd">                prioritise a faster inverse, leading to faster `log_prob`, False will prioritise</span>
+<span class="sd">                faster forward, leading to faster `sample`. Defaults to True. Defaults to True.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">base_dist</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Expected base_dist.ndim==1, got </span><span class="si">{</span><span class="n">base_dist</span><span class="o">.</span><span class="n">ndim</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="n">dim</span> <span class="o">=</span> <span class="n">base_dist</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">permute_strategy</span> <span class="o">=</span> <span class="n">_default_permute_strategy</span><span class="p">(</span><span class="n">dim</span><span class="p">)</span>
+
+        <span class="k">def</span> <span class="nf">make_layer</span><span class="p">(</span><span class="n">key</span><span class="p">):</span>  <span class="c1"># masked autoregressive layer + permutation</span>
+            <span class="n">masked_auto_key</span><span class="p">,</span> <span class="n">p_key</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
+            <span class="n">masked_autoregressive</span> <span class="o">=</span> <span class="n">MaskedAutoregressive</span><span class="p">(</span>
+                <span class="n">key</span><span class="o">=</span><span class="n">masked_auto_key</span><span class="p">,</span>
+                <span class="n">transformer</span><span class="o">=</span><span class="n">transformer</span><span class="p">,</span>
+                <span class="n">dim</span><span class="o">=</span><span class="n">dim</span><span class="p">,</span>
+                <span class="n">cond_dim</span><span class="o">=</span><span class="n">cond_dim</span><span class="p">,</span>
+                <span class="n">nn_width</span><span class="o">=</span><span class="n">nn_width</span><span class="p">,</span>
+                <span class="n">nn_depth</span><span class="o">=</span><span class="n">nn_depth</span><span class="p">,</span>
+                <span class="n">nn_activation</span><span class="o">=</span><span class="n">nn_activation</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="k">if</span> <span class="n">permute_strategy</span> <span class="o">==</span> <span class="s2">&quot;flip&quot;</span><span class="p">:</span>
+                <span class="k">return</span> <span class="n">Chain</span><span class="p">([</span><span class="n">masked_autoregressive</span><span class="p">,</span> <span class="n">Flip</span><span class="p">((</span><span class="n">dim</span><span class="p">,))])</span>
+            <span class="k">if</span> <span class="n">permute_strategy</span> <span class="o">==</span> <span class="s2">&quot;random&quot;</span><span class="p">:</span>
+                <span class="n">perm</span> <span class="o">=</span> <span class="n">Permute</span><span class="p">(</span><span class="n">random</span><span class="o">.</span><span class="n">permutation</span><span class="p">(</span><span class="n">p_key</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">dim</span><span class="p">)))</span>
+                <span class="k">return</span> <span class="n">Chain</span><span class="p">([</span><span class="n">masked_autoregressive</span><span class="p">,</span> <span class="n">perm</span><span class="p">])</span>
+            <span class="k">return</span> <span class="n">masked_autoregressive</span>
+
+        <span class="n">keys</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">flow_layers</span><span class="p">)</span>
+        <span class="n">layers</span> <span class="o">=</span> <span class="n">eqx</span><span class="o">.</span><span class="n">filter_vmap</span><span class="p">(</span><span class="n">make_layer</span><span class="p">)(</span><span class="n">keys</span><span class="p">)</span>
+        <span class="n">bijection</span> <span class="o">=</span> <span class="n">Invert</span><span class="p">(</span><span class="n">Scan</span><span class="p">(</span><span class="n">layers</span><span class="p">))</span> <span class="k">if</span> <span class="n">invert</span> <span class="k">else</span> <span class="n">Scan</span><span class="p">(</span><span class="n">layers</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">nn_width</span> <span class="o">=</span> <span class="n">nn_width</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">nn_depth</span> <span class="o">=</span> <span class="n">nn_depth</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">flow_layers</span> <span class="o">=</span> <span class="n">flow_layers</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">permute_strategy</span> <span class="o">=</span> <span class="n">permute_strategy</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">shape</span> <span class="o">=</span> <span class="p">(</span><span class="n">dim</span><span class="p">,)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span> <span class="o">=</span> <span class="kc">None</span> <span class="k">if</span> <span class="n">cond_dim</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="p">(</span><span class="n">cond_dim</span><span class="p">,)</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">base_dist</span><span class="p">,</span> <span class="n">bijection</span><span class="p">)</span></div></div>
+
+
+<div class="viewcode-block" id="BlockNeuralAutoregressiveFlow"><a class="viewcode-back" href="../../api/flows.html#flowjax.flows.BlockNeuralAutoregressiveFlow">[docs]</a><span class="k">class</span> <span class="nc">BlockNeuralAutoregressiveFlow</span><span class="p">(</span><span class="n">Transformed</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Block neural autoregressive flow (BNAF) (https://arxiv.org/abs/1904.04676).&quot;&quot;&quot;</span>
+
+    <span class="n">flow_layers</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">nn_block_dim</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">nn_depth</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">permute_strategy</span><span class="p">:</span> <span class="nb">str</span>
+
+<div class="viewcode-block" id="BlockNeuralAutoregressiveFlow.__init__"><a class="viewcode-back" href="../../api/flows.html#flowjax.flows.BlockNeuralAutoregressiveFlow.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">key</span><span class="p">:</span> <span class="n">KeyArray</span><span class="p">,</span>
+        <span class="n">base_dist</span><span class="p">:</span> <span class="n">Distribution</span><span class="p">,</span>
+        <span class="n">cond_dim</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">nn_depth</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
+        <span class="n">nn_block_dim</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">8</span><span class="p">,</span>
+        <span class="n">flow_layers</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
+        <span class="n">invert</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Args:</span>
+<span class="sd">            key (KeyArray): Jax PRNGKey.</span>
+<span class="sd">            base_dist (Distribution): Base distribution.</span>
+<span class="sd">            cond_dim (int | None): Dimension of conditional variables.</span>
+<span class="sd">            nn_depth (int): Number of hidden layers within the networks.</span>
+<span class="sd">                Defaults to 1.</span>
+<span class="sd">            nn_block_dim (int): Block size. Hidden layer width is</span>
+<span class="sd">                dim*nn_block_dim. Defaults to 8.</span>
+<span class="sd">            flow_layers (int): Number of BNAF layers. Defaults to 1.</span>
+<span class="sd">            invert: (bool): Use `True` for access of `log_prob` only (e.g.</span>
+<span class="sd">                fitting by maximum likelihood), `False` for the forward direction</span>
+<span class="sd">                (sampling) only (e.g. for fitting variationally).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">base_dist</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Expected base_dist.ndim==1, got </span><span class="si">{</span><span class="n">base_dist</span><span class="o">.</span><span class="n">ndim</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="n">dim</span> <span class="o">=</span> <span class="n">base_dist</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">permute_strategy</span> <span class="o">=</span> <span class="n">_default_permute_strategy</span><span class="p">(</span><span class="n">base_dist</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+
+        <span class="k">def</span> <span class="nf">make_layer</span><span class="p">(</span><span class="n">key</span><span class="p">):</span>  <span class="c1"># masked autoregressive layer + permutation</span>
+            <span class="n">ban_key</span><span class="p">,</span> <span class="n">p_key</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
+            <span class="n">ban</span> <span class="o">=</span> <span class="n">BlockAutoregressiveNetwork</span><span class="p">(</span>
+                <span class="n">key</span><span class="o">=</span><span class="n">ban_key</span><span class="p">,</span>
+                <span class="n">dim</span><span class="o">=</span><span class="n">dim</span><span class="p">,</span>
+                <span class="n">cond_dim</span><span class="o">=</span><span class="n">cond_dim</span><span class="p">,</span>
+                <span class="n">depth</span><span class="o">=</span><span class="n">nn_depth</span><span class="p">,</span>
+                <span class="n">block_dim</span><span class="o">=</span><span class="n">nn_block_dim</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="k">if</span> <span class="n">permute_strategy</span> <span class="o">==</span> <span class="s2">&quot;flip&quot;</span><span class="p">:</span>
+                <span class="k">return</span> <span class="n">Chain</span><span class="p">([</span><span class="n">ban</span><span class="p">,</span> <span class="n">Flip</span><span class="p">((</span><span class="n">dim</span><span class="p">,))])</span>
+            <span class="k">if</span> <span class="n">permute_strategy</span> <span class="o">==</span> <span class="s2">&quot;random&quot;</span><span class="p">:</span>
+                <span class="n">perm</span> <span class="o">=</span> <span class="n">Permute</span><span class="p">(</span><span class="n">random</span><span class="o">.</span><span class="n">permutation</span><span class="p">(</span><span class="n">p_key</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">dim</span><span class="p">)))</span>
+                <span class="k">return</span> <span class="n">Chain</span><span class="p">([</span><span class="n">ban</span><span class="p">,</span> <span class="n">perm</span><span class="p">])</span>
+            <span class="k">return</span> <span class="n">ban</span>
+
+        <span class="n">keys</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">flow_layers</span><span class="p">)</span>
+        <span class="n">layers</span> <span class="o">=</span> <span class="n">eqx</span><span class="o">.</span><span class="n">filter_vmap</span><span class="p">(</span><span class="n">make_layer</span><span class="p">)(</span><span class="n">keys</span><span class="p">)</span>
+        <span class="n">bijection</span> <span class="o">=</span> <span class="n">Invert</span><span class="p">(</span><span class="n">Scan</span><span class="p">(</span><span class="n">layers</span><span class="p">))</span> <span class="k">if</span> <span class="n">invert</span> <span class="k">else</span> <span class="n">Scan</span><span class="p">(</span><span class="n">layers</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">nn_block_dim</span> <span class="o">=</span> <span class="n">nn_block_dim</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">nn_depth</span> <span class="o">=</span> <span class="n">nn_depth</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">flow_layers</span> <span class="o">=</span> <span class="n">flow_layers</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">permute_strategy</span> <span class="o">=</span> <span class="n">permute_strategy</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">shape</span> <span class="o">=</span> <span class="p">(</span><span class="n">dim</span><span class="p">,)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span> <span class="o">=</span> <span class="kc">None</span> <span class="k">if</span> <span class="n">cond_dim</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="p">(</span><span class="n">cond_dim</span><span class="p">,)</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">base_dist</span><span class="p">,</span> <span class="n">bijection</span><span class="p">)</span></div></div>
+
+
+<div class="viewcode-block" id="TriangularSplineFlow"><a class="viewcode-back" href="../../api/flows.html#flowjax.flows.TriangularSplineFlow">[docs]</a><span class="k">class</span> <span class="nc">TriangularSplineFlow</span><span class="p">(</span><span class="n">Transformed</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;A stack of layers, where each layer consists of a triangular affine</span>
+<span class="sd">    transformation with weight normalisation, and an elementwise rational quadratic</span>
+<span class="sd">    spline. Tanh is used to constrain to the input to [-1, 1] before spline</span>
+<span class="sd">    transformations.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">flow_layers</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">permute_strategy</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">knots</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">tanh_max_val</span><span class="p">:</span> <span class="nb">float</span>
+
+<div class="viewcode-block" id="TriangularSplineFlow.__init__"><a class="viewcode-back" href="../../api/flows.html#flowjax.flows.TriangularSplineFlow.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">key</span><span class="p">:</span> <span class="n">KeyArray</span><span class="p">,</span>
+        <span class="n">base_dist</span><span class="p">:</span> <span class="n">Distribution</span><span class="p">,</span>
+        <span class="n">cond_dim</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">flow_layers</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">8</span><span class="p">,</span>
+        <span class="n">knots</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">8</span><span class="p">,</span>
+        <span class="n">tanh_max_val</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">3.0</span><span class="p">,</span>
+        <span class="n">invert</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+        <span class="n">init</span><span class="p">:</span> <span class="n">Callable</span> <span class="o">=</span> <span class="n">glorot_uniform</span><span class="p">(),</span>
+    <span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Args:</span>
+<span class="sd">            key (KeyArray): Jax random seed.</span>
+<span class="sd">            base_dist (Distribution): Base distribution of the flow.</span>
+<span class="sd">            cond_dim (int | None): The number of conditioning features.</span>
+<span class="sd">                Defaults to None.</span>
+<span class="sd">            flow_layers (int): Number of flow layers. Defaults to 8.</span>
+<span class="sd">            knots (int): Number of knots in the splines. Defaults to 8.</span>
+<span class="sd">            tanh_max_val (float): Maximum absolute value beyond which we use linear</span>
+<span class="sd">                &quot;tails&quot; in the tanh function. Defaults to 3.0.</span>
+<span class="sd">            invert: (bool): Use `True` for access of `log_prob` only (e.g.</span>
+<span class="sd">                fitting by maximum likelihood), `False` for the forward direction</span>
+<span class="sd">                (sampling) only (e.g. for fitting variationally).</span>
+<span class="sd">            init (Callable): Initialisation method for the lower triangular weights.</span>
+<span class="sd">                Defaults to glorot_uniform().</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">base_dist</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Expected base_dist.ndim==1, got </span><span class="si">{</span><span class="n">base_dist</span><span class="o">.</span><span class="n">ndim</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+        <span class="n">dim</span> <span class="o">=</span> <span class="n">base_dist</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">permute_strategy</span> <span class="o">=</span> <span class="n">_default_permute_strategy</span><span class="p">(</span><span class="n">dim</span><span class="p">)</span>
+
+        <span class="k">def</span> <span class="nf">make_layer</span><span class="p">(</span><span class="n">key</span><span class="p">):</span>
+            <span class="n">lt_key</span><span class="p">,</span> <span class="n">perm_key</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
+            <span class="n">c_dim</span> <span class="o">=</span> <span class="mi">0</span> <span class="k">if</span> <span class="n">cond_dim</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">cond_dim</span>
+            <span class="n">weights</span> <span class="o">=</span> <span class="n">init</span><span class="p">(</span><span class="n">lt_key</span><span class="p">,</span> <span class="p">(</span><span class="n">dim</span><span class="p">,</span> <span class="n">dim</span> <span class="o">+</span> <span class="n">c_dim</span><span class="p">))</span>
+            <span class="n">lt_weights</span> <span class="o">=</span> <span class="n">weights</span><span class="p">[:,</span> <span class="p">:</span><span class="n">dim</span><span class="p">]</span><span class="o">.</span><span class="n">at</span><span class="p">[</span><span class="n">jnp</span><span class="o">.</span><span class="n">diag_indices</span><span class="p">(</span><span class="n">dim</span><span class="p">)]</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+            <span class="n">cond_weights</span> <span class="o">=</span> <span class="n">weights</span><span class="p">[:,</span> <span class="n">dim</span><span class="p">:]</span>
+            <span class="n">lower_tri</span> <span class="o">=</span> <span class="n">TriangularAffine</span><span class="p">(</span>
+                <span class="n">jnp</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">dim</span><span class="p">),</span> <span class="n">lt_weights</span><span class="p">,</span> <span class="n">weight_normalisation</span><span class="o">=</span><span class="kc">True</span>
+            <span class="p">)</span>
+
+            <span class="n">bijections</span> <span class="o">=</span> <span class="p">[</span>
+                <span class="n">TanhLinearTails</span><span class="p">(</span><span class="n">tanh_max_val</span><span class="p">,</span> <span class="p">(</span><span class="n">dim</span><span class="p">,)),</span>
+                <span class="n">RationalQuadraticSpline</span><span class="p">(</span><span class="n">knots</span><span class="p">,</span> <span class="n">interval</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="p">(</span><span class="n">dim</span><span class="p">,)),</span>
+                <span class="n">Invert</span><span class="p">(</span><span class="n">TanhLinearTails</span><span class="p">(</span><span class="n">tanh_max_val</span><span class="p">,</span> <span class="p">(</span><span class="n">dim</span><span class="p">,))),</span>
+                <span class="n">lower_tri</span><span class="p">,</span>
+            <span class="p">]</span>
+
+            <span class="k">if</span> <span class="n">cond_dim</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">linear_condition</span> <span class="o">=</span> <span class="n">AdditiveLinearCondition</span><span class="p">(</span><span class="n">cond_weights</span><span class="p">)</span>
+                <span class="n">bijections</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">linear_condition</span><span class="p">)</span>
+
+            <span class="k">if</span> <span class="n">permute_strategy</span> <span class="o">==</span> <span class="s2">&quot;flip&quot;</span><span class="p">:</span>
+                <span class="n">bijections</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">Flip</span><span class="p">((</span><span class="n">dim</span><span class="p">,)))</span>
+            <span class="k">elif</span> <span class="n">permute_strategy</span> <span class="o">==</span> <span class="s2">&quot;random&quot;</span><span class="p">:</span>
+                <span class="n">bijections</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                    <span class="n">Permute</span><span class="p">(</span><span class="n">random</span><span class="o">.</span><span class="n">permutation</span><span class="p">(</span><span class="n">perm_key</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">dim</span><span class="p">)))</span>
+                <span class="p">)</span>
+            <span class="k">return</span> <span class="n">Chain</span><span class="p">(</span><span class="n">bijections</span><span class="p">)</span>
+
+        <span class="n">keys</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">flow_layers</span><span class="p">)</span>
+        <span class="n">layers</span> <span class="o">=</span> <span class="n">eqx</span><span class="o">.</span><span class="n">filter_vmap</span><span class="p">(</span><span class="n">make_layer</span><span class="p">)(</span><span class="n">keys</span><span class="p">)</span>
+        <span class="n">bijection</span> <span class="o">=</span> <span class="n">Invert</span><span class="p">(</span><span class="n">Scan</span><span class="p">(</span><span class="n">layers</span><span class="p">))</span> <span class="k">if</span> <span class="n">invert</span> <span class="k">else</span> <span class="n">Scan</span><span class="p">(</span><span class="n">layers</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">flow_layers</span> <span class="o">=</span> <span class="n">flow_layers</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">permute_strategy</span> <span class="o">=</span> <span class="n">permute_strategy</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">knots</span> <span class="o">=</span> <span class="n">knots</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">tanh_max_val</span> <span class="o">=</span> <span class="n">tanh_max_val</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">shape</span> <span class="o">=</span> <span class="p">(</span><span class="n">dim</span><span class="p">,)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span> <span class="o">=</span> <span class="kc">None</span> <span class="k">if</span> <span class="n">cond_dim</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="p">(</span><span class="n">cond_dim</span><span class="p">,)</span>
+
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">base_dist</span><span class="p">,</span> <span class="n">bijection</span><span class="p">)</span></div></div>
+
+
+<span class="k">def</span> <span class="nf">_default_permute_strategy</span><span class="p">(</span><span class="n">dim</span><span class="p">):</span>
+    <span class="k">if</span> <span class="n">dim</span> <span class="o">&lt;=</span> <span class="mi">2</span><span class="p">:</span>
+        <span class="k">return</span> <span class="p">{</span><span class="mi">1</span><span class="p">:</span> <span class="s2">&quot;none&quot;</span><span class="p">,</span> <span class="mi">2</span><span class="p">:</span> <span class="s2">&quot;flip&quot;</span><span class="p">}[</span><span class="n">dim</span><span class="p">]</span>
+    <span class="k">return</span> <span class="s2">&quot;random&quot;</span>
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2022, Daniel Ward.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

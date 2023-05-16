@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>flowjax.distributions &mdash; FlowJax v9.0.0 documentation</title>
+      <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/style.css" type="text/css" />
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js"></script>
+        <script src="../../_static/doctools.js"></script>
+        <script src="../../_static/sphinx_highlight.js"></script>
+        <script src="../../_static/clipboard.min.js"></script>
+        <script src="../../_static/copybutton.js"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../index.html" class="icon icon-home">
+            FlowJax
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Examples</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../examples/unconditional.html">Unconditional density estmation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples/conditional.html">Conditional density estimation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples/variational_inference.html">Variational inference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples/bounded.html">Bounded flows</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">API</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../api/bijections.html">Bijections</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api/distributions.html">Distributions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api/flows.html">Flows</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api/training.html">Training</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Miscellaneous</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../faq.html">FAQ</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">FlowJax</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">flowjax.distributions</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for flowjax.distributions</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Distributions - including the base class Distribution, common distributions</span>
+<span class="sd">and a Transformed distribution class.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="kn">from</span> <span class="nn">abc</span> <span class="kn">import</span> <span class="n">abstractmethod</span>
+<span class="kn">from</span> <span class="nn">math</span> <span class="kn">import</span> <span class="n">prod</span>
+<span class="kn">import</span> <span class="nn">equinox</span> <span class="k">as</span> <span class="nn">eqx</span>
+<span class="kn">import</span> <span class="nn">jax.numpy</span> <span class="k">as</span> <span class="nn">jnp</span>
+<span class="kn">import</span> <span class="nn">jax.random</span> <span class="k">as</span> <span class="nn">jr</span>
+<span class="kn">from</span> <span class="nn">jax</span> <span class="kn">import</span> <span class="n">Array</span>
+<span class="kn">from</span> <span class="nn">jax.experimental</span> <span class="kn">import</span> <span class="n">checkify</span>
+<span class="kn">from</span> <span class="nn">jax.scipy</span> <span class="kn">import</span> <span class="n">stats</span> <span class="k">as</span> <span class="n">jstats</span>
+<span class="kn">from</span> <span class="nn">jax.typing</span> <span class="kn">import</span> <span class="n">ArrayLike</span>
+
+<span class="kn">from</span> <span class="nn">flowjax.bijections</span> <span class="kn">import</span> <span class="n">Affine</span><span class="p">,</span> <span class="n">Bijection</span>
+<span class="kn">from</span> <span class="nn">flowjax.utils</span> <span class="kn">import</span> <span class="n">_get_ufunc_signature</span><span class="p">,</span> <span class="n">merge_cond_shapes</span>
+
+
+<div class="viewcode-block" id="Distribution"><a class="viewcode-back" href="../../api/distributions.html#flowjax.distributions.Distribution">[docs]</a><span class="k">class</span> <span class="nc">Distribution</span><span class="p">(</span><span class="n">eqx</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Distribution base class. Distributions all have an attribute ``shape``,</span>
+<span class="sd">    denoting the shape of a single sample from the distribution. This corresponds to the</span>
+<span class="sd">    ``batch_shape + event_shape`` in torch/numpyro distributions. Similarly, the</span>
+<span class="sd">    ``cond_shape`` attribute denotes the shape of the conditioning variable.</span>
+<span class="sd">    This attribute is None for unconditional distributions. For example</span>
+
+<span class="sd">    .. doctest::</span>
+
+<span class="sd">        &gt;&gt;&gt; import jax.numpy as jnp</span>
+<span class="sd">        &gt;&gt;&gt; from flowjax.distributions import Normal</span>
+<span class="sd">        &gt;&gt;&gt; dist = Normal(jnp.zeros(2))</span>
+<span class="sd">        &gt;&gt;&gt; dist.shape</span>
+<span class="sd">        (2,)</span>
+<span class="sd">        &gt;&gt;&gt; dist.cond_shape is None</span>
+<span class="sd">        True</span>
+
+<span class="sd">    Distributions are registered as jax PyTrees (as they are equinox modules), and as such</span>
+<span class="sd">    they are compatible with normal jax operations.</span>
+
+<span class="sd">    **Implementing a distribution**</span>
+
+<span class="sd">        (1) Inherit from ``Distribution``.</span>
+<span class="sd">        (2) Define attributes ``shape`` and ``cond_shape``. ``cond_shape`` should be</span>
+<span class="sd">            ``None`` for unconditional distributions.</span>
+<span class="sd">        (3) Define the ``_sample`` method, which samples a point with a shape of</span>
+<span class="sd">            ``shape``, (given a conditioning variable with shape ``cond_shape`` for</span>
+<span class="sd">            conditional distributions).</span>
+<span class="sd">        (4) Define the ``_log_prob`` method, which evaluates the log probability,</span>
+<span class="sd">            given an input of shape ``shape`` (and a conditioning variable with shape</span>
+<span class="sd">            ``cond_shape`` for conditional distributions).</span>
+
+<span class="sd">        The base class will handle defining more convenient log_prob and sample methods</span>
+<span class="sd">        that support broadcasting and perform argument checks.</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">shape</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
+    <span class="n">cond_shape</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span>
+
+    <span class="nd">@abstractmethod</span>
+    <span class="k">def</span> <span class="nf">_log_prob</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">condition</span><span class="p">:</span> <span class="n">Array</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Array</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Evaluate the log probability of point x.&quot;&quot;&quot;</span>
+
+    <span class="nd">@abstractmethod</span>
+    <span class="k">def</span> <span class="nf">_sample</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="p">:</span> <span class="n">jr</span><span class="o">.</span><span class="n">KeyArray</span><span class="p">,</span> <span class="n">condition</span><span class="p">:</span> <span class="n">Array</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Array</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Sample a point from the distribution.&quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="nf">_sample_and_log_prob</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="p">:</span> <span class="n">jr</span><span class="o">.</span><span class="n">KeyArray</span><span class="p">,</span> <span class="n">condition</span><span class="p">:</span> <span class="n">Array</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="n">Array</span><span class="p">]:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Sample a point from the distribution, and return its log probability.</span>
+<span class="sd">        Subclasses can reimplement this method in cases where more efficient methods</span>
+<span class="sd">        exists (e.g. see Transformed).</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_sample</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>
+        <span class="n">log_prob</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_log_prob</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">x</span><span class="p">,</span> <span class="n">log_prob</span>
+
+<div class="viewcode-block" id="Distribution.log_prob"><a class="viewcode-back" href="../../api/distributions.html#flowjax.distributions.Distribution.log_prob">[docs]</a>    <span class="k">def</span> <span class="nf">log_prob</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">condition</span><span class="p">:</span> <span class="n">Array</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Array</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Evaluate the log probability. Uses numpy like broadcasting if additional</span>
+<span class="sd">        leading dimensions are passed.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            x (Array): Points at which to evaluate density.</span>
+<span class="sd">            condition (Array | None): Conditioning variables. Defaults to None.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            Array: Jax array of log probabilities.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_argcheck</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">condition</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">sig</span> <span class="o">=</span> <span class="n">_get_ufunc_signature</span><span class="p">([</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">],</span> <span class="p">[()])</span>
+            <span class="n">exclude</span> <span class="o">=</span> <span class="nb">frozenset</span><span class="p">([</span><span class="mi">1</span><span class="p">])</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">sig</span> <span class="o">=</span> <span class="n">_get_ufunc_signature</span><span class="p">([</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span><span class="p">],</span> <span class="p">[()])</span>
+            <span class="n">exclude</span> <span class="o">=</span> <span class="nb">frozenset</span><span class="p">()</span>
+
+        <span class="n">lps</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">vectorize</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_log_prob</span><span class="p">,</span> <span class="n">signature</span><span class="o">=</span><span class="n">sig</span><span class="p">,</span> <span class="n">excluded</span><span class="o">=</span><span class="n">exclude</span><span class="p">)(</span>
+            <span class="n">x</span><span class="p">,</span> <span class="n">condition</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">isnan</span><span class="p">(</span><span class="n">lps</span><span class="p">),</span> <span class="o">-</span><span class="n">jnp</span><span class="o">.</span><span class="n">inf</span><span class="p">,</span> <span class="n">lps</span><span class="p">)</span>  <span class="c1"># type: ignore</span></div>
+
+<div class="viewcode-block" id="Distribution.sample"><a class="viewcode-back" href="../../api/distributions.html#flowjax.distributions.Distribution.sample">[docs]</a>    <span class="k">def</span> <span class="nf">sample</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">key</span><span class="p">:</span> <span class="n">jr</span><span class="o">.</span><span class="n">KeyArray</span><span class="p">,</span>
+        <span class="n">sample_shape</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">(),</span>
+        <span class="n">condition</span><span class="p">:</span> <span class="n">Array</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Array</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Sample from the distribution. For unconditional distributions, the output will</span>
+<span class="sd">        be of shape ``sample_shape + dist.shape``.</span>
+
+<span class="sd">        Example:</span>
+
+<span class="sd">            .. testsetup::</span>
+
+<span class="sd">                from flowjax.distributions import StandardNormal</span>
+<span class="sd">                import jax.random as jr</span>
+<span class="sd">                import jax.numpy as jnp</span>
+<span class="sd">                from flowjax.flows import CouplingFlow</span>
+<span class="sd">                from flowjax.bijections import Affine</span>
+<span class="sd">                # For a unconditional distribution:</span>
+<span class="sd">                key = jr.PRNGKey(0)</span>
+<span class="sd">                dist = StandardNormal((2,))</span>
+<span class="sd">                # For a conditional distribution</span>
+<span class="sd">                cond_dist = CouplingFlow(</span>
+<span class="sd">                    key, StandardNormal((2,)), cond_dim=3, transformer=Affine()</span>
+<span class="sd">                    )</span>
+
+<span class="sd">            For an unconditional distribution:</span>
+
+<span class="sd">            .. doctest::</span>
+
+<span class="sd">                &gt;&gt;&gt; dist.shape</span>
+<span class="sd">                (2,)</span>
+<span class="sd">                &gt;&gt;&gt; samples = dist.sample(key, (10, ))</span>
+<span class="sd">                &gt;&gt;&gt; samples.shape</span>
+<span class="sd">                (10, 2)</span>
+
+<span class="sd">            For a conditional distribution:</span>
+
+<span class="sd">            .. doctest::</span>
+
+<span class="sd">                &gt;&gt;&gt; cond_dist.shape</span>
+<span class="sd">                (2,)</span>
+<span class="sd">                &gt;&gt;&gt; cond_dist.cond_shape</span>
+<span class="sd">                (3,)</span>
+<span class="sd">                &gt;&gt;&gt; # Sample 10 times for a particular condition</span>
+<span class="sd">                &gt;&gt;&gt; samples = cond_dist.sample(key, (10,), condition=jnp.ones(3))</span>
+<span class="sd">                &gt;&gt;&gt; samples.shape</span>
+<span class="sd">                (10, 2)</span>
+<span class="sd">                &gt;&gt;&gt; # Sampling, batching over a condition</span>
+<span class="sd">                &gt;&gt;&gt; samples = cond_dist.sample(key, condition=jnp.ones((5, 3)))</span>
+<span class="sd">                &gt;&gt;&gt; samples.shape</span>
+<span class="sd">                (5, 2)</span>
+<span class="sd">                &gt;&gt;&gt; # Sample 10 times for each of 5 conditioning variables</span>
+<span class="sd">                &gt;&gt;&gt; samples = cond_dist.sample(key, (10,), condition=jnp.ones((5, 3)))</span>
+<span class="sd">                &gt;&gt;&gt; samples.shape</span>
+<span class="sd">                (10, 5, 2)</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            key (jr.KeyArray): Jax random key.</span>
+<span class="sd">            condition (Array | None): Conditioning variables. Defaults to None.</span>
+<span class="sd">            sample_shape (tuple[int, ...]): Sample shape. Defaults to ().</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_argcheck</span><span class="p">(</span><span class="n">condition</span><span class="o">=</span><span class="n">condition</span><span class="p">)</span>
+        <span class="n">excluded</span><span class="p">,</span> <span class="n">signature</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_vectorize_sample_args</span><span class="p">()</span>
+        <span class="n">keys</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_sample_keys</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">sample_shape</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">vectorize</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_sample</span><span class="p">,</span> <span class="n">excluded</span><span class="o">=</span><span class="n">excluded</span><span class="p">,</span> <span class="n">signature</span><span class="o">=</span><span class="n">signature</span><span class="p">)(</span>
+            <span class="n">keys</span><span class="p">,</span> <span class="n">condition</span>
+        <span class="p">)</span>  <span class="c1"># type: ignore</span></div>
+
+<div class="viewcode-block" id="Distribution.sample_and_log_prob"><a class="viewcode-back" href="../../api/distributions.html#flowjax.distributions.Distribution.sample_and_log_prob">[docs]</a>    <span class="k">def</span> <span class="nf">sample_and_log_prob</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">key</span><span class="p">:</span> <span class="n">jr</span><span class="o">.</span><span class="n">KeyArray</span><span class="p">,</span>
+        <span class="n">sample_shape</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">(),</span>
+        <span class="n">condition</span><span class="p">:</span> <span class="n">Array</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Sample the distribution and return the samples and corresponding log probabilities.</span>
+<span class="sd">        For transformed distributions (especially flows), this will generally be more efficient</span>
+<span class="sd">        than calling the methods seperately.</span>
+
+<span class="sd">        Refer to the :py:meth:`~flowjax.distributions.Distribution.sample` and</span>
+<span class="sd">        Refer to the :py:meth:`~flowjax.distributions.Distribution.log_prob` documentation</span>
+<span class="sd">        for more information.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            key (jr.KeyArray): Jax random key.</span>
+<span class="sd">            condition (Array | None): Conditioning variables. Defaults to None.</span>
+<span class="sd">            sample_shape (tuple[int, ...]): Sample shape. Defaults to ().</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_argcheck</span><span class="p">(</span><span class="n">condition</span><span class="o">=</span><span class="n">condition</span><span class="p">)</span>
+
+        <span class="n">excluded</span><span class="p">,</span> <span class="n">signature</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_vectorize_sample_args</span><span class="p">(</span><span class="n">sample_and_log_prob</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">keys</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_get_sample_keys</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">sample_shape</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">vectorize</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_sample_and_log_prob</span><span class="p">,</span> <span class="n">excluded</span><span class="o">=</span><span class="n">excluded</span><span class="p">,</span> <span class="n">signature</span><span class="o">=</span><span class="n">signature</span>
+        <span class="p">)(</span><span class="n">keys</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_vectorize_sample_args</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">sample_and_log_prob</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Get the excluded arguments and ufunc signature for sample or sample_and_log_prob&quot;&quot;&quot;</span>
+        <span class="n">out_shapes</span> <span class="o">=</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="p">()]</span> <span class="k">if</span> <span class="n">sample_and_log_prob</span> <span class="k">else</span> <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">]</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">excluded</span> <span class="o">=</span> <span class="nb">frozenset</span><span class="p">([</span><span class="mi">1</span><span class="p">])</span>
+            <span class="n">in_shapes</span> <span class="o">=</span> <span class="p">[(</span><span class="mi">2</span><span class="p">,)]</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">excluded</span> <span class="o">=</span> <span class="nb">frozenset</span><span class="p">()</span>
+            <span class="n">in_shapes</span> <span class="o">=</span> <span class="p">[(</span><span class="mi">2</span><span class="p">,),</span> <span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span><span class="p">]</span>
+        <span class="n">signature</span> <span class="o">=</span> <span class="n">_get_ufunc_signature</span><span class="p">(</span><span class="n">in_shapes</span><span class="p">,</span> <span class="n">out_shapes</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">excluded</span><span class="p">,</span> <span class="n">signature</span>
+
+    <span class="k">def</span> <span class="nf">_get_sample_keys</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="p">,</span> <span class="n">sample_shape</span><span class="p">,</span> <span class="n">condition</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Splits a key into an arrray of keys with shape</span>
+<span class="sd">        sample_shape + leading_cond_shape + (2,).&quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">key_shape</span> <span class="o">=</span> <span class="n">sample_shape</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">leading_cond_shape</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="n">condition</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span> <span class="o">-</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span><span class="p">)]</span>
+                <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span>
+                <span class="k">else</span> <span class="n">condition</span><span class="o">.</span><span class="n">shape</span>
+            <span class="p">)</span>
+            <span class="n">key_shape</span> <span class="o">=</span> <span class="n">sample_shape</span> <span class="o">+</span> <span class="n">leading_cond_shape</span>
+
+        <span class="n">key_size</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">prod</span><span class="p">(</span><span class="n">key_shape</span><span class="p">))</span>  <span class="c1"># Still need 1 key for scalar sample</span>
+        <span class="n">keys</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">jr</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">key_size</span><span class="p">),</span> <span class="n">key_shape</span> <span class="o">+</span> <span class="p">(</span><span class="mi">2</span><span class="p">,))</span>  <span class="c1"># type: ignore</span>
+        <span class="k">return</span> <span class="n">keys</span>
+
+    <span class="k">def</span> <span class="nf">_argcheck</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">condition</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="c1"># jnp.vectorize would catch ndim mismatches, but it doesn&#39;t check axis lengths.</span>
+        <span class="k">if</span> <span class="n">x</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">x_trailing</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="bp">self</span><span class="o">.</span><span class="n">ndim</span> <span class="p">:]</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">ndim</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="p">()</span>
+            <span class="k">if</span> <span class="n">x_trailing</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">&quot;Expected trailing dimensions in input x to match the distribution &quot;</span>
+                    <span class="sa">f</span><span class="s2">&quot;shape, but got x shape </span><span class="si">{</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">, and distribution shape &quot;</span>
+                    <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">.&quot;</span>
+                <span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">condition</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">&quot;Conditioning variable was not provided. &quot;</span>
+                <span class="sa">f</span><span class="s2">&quot;Expected conditioning variable with trailing shape </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span><span class="si">}</span><span class="s2">.&quot;</span>
+            <span class="p">)</span>
+
+        <span class="k">if</span> <span class="n">condition</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">&quot;condition should not be provided for unconditional distribution.&quot;</span>
+                <span class="p">)</span>
+            <span class="n">condition_trailing</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="n">condition</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span><span class="p">)</span> <span class="p">:]</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">cond_ndim</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="p">()</span>  <span class="c1"># type: ignore</span>
+            <span class="p">)</span>
+            <span class="k">if</span> <span class="n">condition_trailing</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">&quot;Expected trailing dimensions in the condition to match &quot;</span>
+                    <span class="s2">&quot;distribution.cond_shape, but got condition shape &quot;</span>
+                    <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">condition</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">, and distribution.cond_shape </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span><span class="si">}</span><span class="s2">.&quot;</span>
+                <span class="p">)</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">ndim</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;The number of dimensions in the distribution (the length of the shape).&quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">cond_ndim</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;The number of dimensions of the conditioning variable (length of cond_shape).&quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">return</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span><span class="p">)</span>
+        <span class="k">return</span> <span class="kc">None</span></div>
+
+
+<div class="viewcode-block" id="Transformed"><a class="viewcode-back" href="../../api/distributions.html#flowjax.distributions.Transformed">[docs]</a><span class="k">class</span> <span class="nc">Transformed</span><span class="p">(</span><span class="n">Distribution</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Form a distribution like object using a base distribution and a</span>
+<span class="sd">    bijection. We take the forward bijection for use in sampling, and the inverse</span>
+<span class="sd">    bijection for use in density evaluation.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">base_dist</span><span class="p">:</span> <span class="n">Distribution</span>
+    <span class="n">bijection</span><span class="p">:</span> <span class="n">Bijection</span>
+    <span class="n">cond_shape</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span>
+
+<div class="viewcode-block" id="Transformed.__init__"><a class="viewcode-back" href="../../api/distributions.html#flowjax.distributions.Transformed.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">base_dist</span><span class="p">:</span> <span class="n">Distribution</span><span class="p">,</span>
+        <span class="n">bijection</span><span class="p">:</span> <span class="n">Bijection</span><span class="p">,</span>
+    <span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Args:</span>
+<span class="sd">            base_dist (Distribution): Base distribution.</span>
+<span class="sd">            bijection (Bijection): Bijection to transform distribution.</span>
+
+<span class="sd">        Example:</span>
+
+<span class="sd">        .. doctest::</span>
+
+<span class="sd">            &gt;&gt;&gt; from flowjax.distributions import StandardNormal, Transformed</span>
+<span class="sd">            &gt;&gt;&gt; from flowjax.bijections import Affine</span>
+<span class="sd">            &gt;&gt;&gt; normal = StandardNormal()</span>
+<span class="sd">            &gt;&gt;&gt; bijection = Affine(1)</span>
+<span class="sd">            &gt;&gt;&gt; transformed = Transformed(normal, bijection)</span>
+
+
+<span class="sd">        .. warning::</span>
+<span class="sd">            It is the currently the users responsibility to ensure the bijection is valid</span>
+<span class="sd">            across the entire support of the distribution. Failure to do so may lead to</span>
+<span class="sd">            to unexpected results. In future versions explicit constraints may be introduced.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">base_dist</span> <span class="o">=</span> <span class="n">base_dist</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">bijection</span> <span class="o">=</span> <span class="n">bijection</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">shape</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">base_dist</span><span class="o">.</span><span class="n">shape</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span> <span class="o">=</span> <span class="n">merge_cond_shapes</span><span class="p">(</span>
+            <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">bijection</span><span class="o">.</span><span class="n">cond_shape</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">base_dist</span><span class="o">.</span><span class="n">cond_shape</span><span class="p">)</span>
+        <span class="p">)</span></div>
+
+    <span class="k">def</span> <span class="nf">_log_prob</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">condition</span><span class="p">:</span> <span class="n">Array</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+        <span class="n">z</span><span class="p">,</span> <span class="n">log_abs_det</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">bijection</span><span class="o">.</span><span class="n">inverse_and_log_det</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>
+        <span class="n">p_z</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">base_dist</span><span class="o">.</span><span class="n">_log_prob</span><span class="p">(</span><span class="n">z</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>  <span class="c1"># pylint: disable W0212</span>
+        <span class="k">return</span> <span class="n">p_z</span> <span class="o">+</span> <span class="n">log_abs_det</span>
+
+    <span class="k">def</span> <span class="nf">_sample</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="p">:</span> <span class="n">jr</span><span class="o">.</span><span class="n">KeyArray</span><span class="p">,</span> <span class="n">condition</span><span class="p">:</span> <span class="n">Array</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+        <span class="n">base_sample</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">base_dist</span><span class="o">.</span><span class="n">_sample</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">bijection</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="n">base_sample</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_sample_and_log_prob</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="p">:</span> <span class="n">jr</span><span class="o">.</span><span class="n">KeyArray</span><span class="p">,</span> <span class="n">condition</span><span class="p">:</span> <span class="n">Array</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+        <span class="c1"># We overwrite the naive implementation of calling both methods seperately to</span>
+        <span class="c1"># avoid computing the inverse transformation.</span>
+        <span class="n">base_sample</span><span class="p">,</span> <span class="n">log_prob_base</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">base_dist</span><span class="o">.</span><span class="n">_sample_and_log_prob</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>
+        <span class="n">sample</span><span class="p">,</span> <span class="n">forward_log_dets</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">bijection</span><span class="o">.</span><span class="n">transform_and_log_det</span><span class="p">(</span>
+            <span class="n">base_sample</span><span class="p">,</span> <span class="n">condition</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="n">sample</span><span class="p">,</span> <span class="n">log_prob_base</span> <span class="o">-</span> <span class="n">forward_log_dets</span></div>
+
+
+<div class="viewcode-block" id="StandardNormal"><a class="viewcode-back" href="../../api/distributions.html#flowjax.distributions.StandardNormal">[docs]</a><span class="k">class</span> <span class="nc">StandardNormal</span><span class="p">(</span><span class="n">Distribution</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Implements a standard normal distribution, condition is ignored.&quot;&quot;&quot;</span>
+
+<div class="viewcode-block" id="StandardNormal.__init__"><a class="viewcode-back" href="../../api/distributions.html#flowjax.distributions.StandardNormal.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">shape</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">()):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Args:</span>
+<span class="sd">            shape (tuple[int, ...]): The shape of the normal distribution. Defaults to ().</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">shape</span> <span class="o">=</span> <span class="n">shape</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span> <span class="o">=</span> <span class="kc">None</span></div>
+
+    <span class="k">def</span> <span class="nf">_log_prob</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">condition</span><span class="p">:</span> <span class="n">Array</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">jstats</span><span class="o">.</span><span class="n">norm</span><span class="o">.</span><span class="n">logpdf</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">_sample</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="p">:</span> <span class="n">jr</span><span class="o">.</span><span class="n">KeyArray</span><span class="p">,</span> <span class="n">condition</span><span class="p">:</span> <span class="n">Array</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">jr</span><span class="o">.</span><span class="n">normal</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span></div>
+
+
+<div class="viewcode-block" id="Normal"><a class="viewcode-back" href="../../api/distributions.html#flowjax.distributions.Normal">[docs]</a><span class="k">class</span> <span class="nc">Normal</span><span class="p">(</span><span class="n">Transformed</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Implements an independent Normal distribution with mean and std for</span>
+<span class="sd">    each dimension. `loc` and `scale` should be broadcastable.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">bijection</span><span class="p">:</span> <span class="n">Affine</span>
+
+<div class="viewcode-block" id="Normal.__init__"><a class="viewcode-back" href="../../api/distributions.html#flowjax.distributions.Normal.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">loc</span><span class="p">:</span> <span class="n">ArrayLike</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">scale</span><span class="p">:</span> <span class="n">ArrayLike</span> <span class="o">=</span> <span class="mi">1</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Args:</span>
+<span class="sd">            loc (Array): Means. Defaults to 0.</span>
+<span class="sd">            scale (Array): Standard deviations. Defaults to 1.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">shape</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">broadcast_shapes</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">shape</span><span class="p">(</span><span class="n">loc</span><span class="p">),</span> <span class="n">jnp</span><span class="o">.</span><span class="n">shape</span><span class="p">(</span><span class="n">scale</span><span class="p">))</span>
+        <span class="n">base_dist</span> <span class="o">=</span> <span class="n">StandardNormal</span><span class="p">(</span><span class="n">shape</span><span class="p">)</span>
+        <span class="n">bijection</span> <span class="o">=</span> <span class="n">Affine</span><span class="p">(</span><span class="n">loc</span><span class="o">=</span><span class="n">loc</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="n">scale</span><span class="p">)</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">base_dist</span><span class="p">,</span> <span class="n">bijection</span><span class="p">)</span></div>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">loc</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Location of the distribution&quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">bijection</span><span class="o">.</span><span class="n">loc</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">scale</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;scale of the distribution&quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">bijection</span><span class="o">.</span><span class="n">scale</span></div>
+
+
+<span class="k">class</span> <span class="nc">_StandardUniform</span><span class="p">(</span><span class="n">Distribution</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Implements a standard independent Uniform distribution, ie X ~ Uniform([0, 1]^dim).&quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">shape</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">()):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">shape</span> <span class="o">=</span> <span class="n">shape</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="k">def</span> <span class="nf">_log_prob</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">condition</span><span class="p">:</span> <span class="n">Array</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">jstats</span><span class="o">.</span><span class="n">uniform</span><span class="o">.</span><span class="n">logpdf</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">_sample</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="p">:</span> <span class="n">jr</span><span class="o">.</span><span class="n">KeyArray</span><span class="p">,</span> <span class="n">condition</span><span class="p">:</span> <span class="n">Array</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">jr</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="Uniform"><a class="viewcode-back" href="../../api/distributions.html#flowjax.distributions.Uniform">[docs]</a><span class="k">class</span> <span class="nc">Uniform</span><span class="p">(</span><span class="n">Transformed</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Implements an independent uniform distribution between min and max for each</span>
+<span class="sd">    dimension. `minval` and `maxval` should be broadcastable.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">bijection</span><span class="p">:</span> <span class="n">Affine</span>
+
+<div class="viewcode-block" id="Uniform.__init__"><a class="viewcode-back" href="../../api/distributions.html#flowjax.distributions.Uniform.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">minval</span><span class="p">:</span> <span class="n">ArrayLike</span><span class="p">,</span> <span class="n">maxval</span><span class="p">:</span> <span class="n">ArrayLike</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Args:</span>
+<span class="sd">            minval (Array): Minimum values.</span>
+<span class="sd">            maxval (Array): Maximum values.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">shape</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">broadcast_shapes</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">shape</span><span class="p">(</span><span class="n">minval</span><span class="p">),</span> <span class="n">jnp</span><span class="o">.</span><span class="n">shape</span><span class="p">(</span><span class="n">maxval</span><span class="p">))</span>
+        <span class="n">minval</span><span class="p">,</span> <span class="n">maxval</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">minval</span><span class="p">),</span> <span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">maxval</span><span class="p">)</span>
+        <span class="n">checkify</span><span class="o">.</span><span class="n">check</span><span class="p">(</span>
+            <span class="n">jnp</span><span class="o">.</span><span class="n">all</span><span class="p">(</span><span class="n">maxval</span> <span class="o">&gt;=</span> <span class="n">minval</span><span class="p">),</span>
+            <span class="s2">&quot;Minimums must be less than the maximums.&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="n">base_dist</span> <span class="o">=</span> <span class="n">_StandardUniform</span><span class="p">(</span><span class="n">shape</span><span class="p">)</span>
+        <span class="n">bijection</span> <span class="o">=</span> <span class="n">Affine</span><span class="p">(</span><span class="n">loc</span><span class="o">=</span><span class="n">minval</span><span class="p">,</span> <span class="n">scale</span><span class="o">=</span><span class="n">maxval</span> <span class="o">-</span> <span class="n">minval</span><span class="p">)</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">base_dist</span><span class="p">,</span> <span class="n">bijection</span><span class="p">)</span></div>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">minval</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Minimum value of the uniform distribution.&quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">bijection</span><span class="o">.</span><span class="n">loc</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">maxval</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Maximum value of the uniform distribution.&quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">bijection</span><span class="o">.</span><span class="n">loc</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">bijection</span><span class="o">.</span><span class="n">scale</span></div>
+
+
+<span class="k">class</span> <span class="nc">_StandardGumbel</span><span class="p">(</span><span class="n">Distribution</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Standard gumbel distribution (https://en.wikipedia.org/wiki/Gumbel_distribution).&quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">shape</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">()):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">shape</span> <span class="o">=</span> <span class="n">shape</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="k">def</span> <span class="nf">_log_prob</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">condition</span><span class="p">:</span> <span class="n">Array</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="o">-</span><span class="p">(</span><span class="n">x</span> <span class="o">+</span> <span class="n">jnp</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="o">-</span><span class="n">x</span><span class="p">))</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">_sample</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="p">:</span> <span class="n">jr</span><span class="o">.</span><span class="n">KeyArray</span><span class="p">,</span> <span class="n">condition</span><span class="p">:</span> <span class="n">Array</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">jr</span><span class="o">.</span><span class="n">gumbel</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="Gumbel"><a class="viewcode-back" href="../../api/distributions.html#flowjax.distributions.Gumbel">[docs]</a><span class="k">class</span> <span class="nc">Gumbel</span><span class="p">(</span><span class="n">Transformed</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Gumbel distribution (https://en.wikipedia.org/wiki/Gumbel_distribution)&quot;&quot;&quot;</span>
+
+    <span class="n">bijection</span><span class="p">:</span> <span class="n">Affine</span>
+
+<div class="viewcode-block" id="Gumbel.__init__"><a class="viewcode-back" href="../../api/distributions.html#flowjax.distributions.Gumbel.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">loc</span><span class="p">:</span> <span class="n">ArrayLike</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">scale</span><span class="p">:</span> <span class="n">ArrayLike</span> <span class="o">=</span> <span class="mi">1</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        `loc` and `scale` should broadcast to the dimension of the distribution.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            loc (Array): Location paramter.</span>
+<span class="sd">            scale (Array): Scale parameter. Defaults to 1.0.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">shape</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">broadcast_shapes</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">shape</span><span class="p">(</span><span class="n">loc</span><span class="p">),</span> <span class="n">jnp</span><span class="o">.</span><span class="n">shape</span><span class="p">(</span><span class="n">scale</span><span class="p">))</span>
+        <span class="n">base_dist</span> <span class="o">=</span> <span class="n">_StandardGumbel</span><span class="p">(</span><span class="n">shape</span><span class="p">)</span>
+        <span class="n">bijection</span> <span class="o">=</span> <span class="n">Affine</span><span class="p">(</span><span class="n">loc</span><span class="p">,</span> <span class="n">scale</span><span class="p">)</span>
+
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">base_dist</span><span class="p">,</span> <span class="n">bijection</span><span class="p">)</span></div>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">loc</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Location of the distribution&quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">bijection</span><span class="o">.</span><span class="n">loc</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">scale</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Scale of the distribution.&quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">bijection</span><span class="o">.</span><span class="n">scale</span></div>
+
+
+<span class="k">class</span> <span class="nc">_StandardCauchy</span><span class="p">(</span><span class="n">Distribution</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Implements standard cauchy distribution (loc=0, scale=1)</span>
+<span class="sd">    Ref: https://en.wikipedia.org/wiki/Cauchy_distribution</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">shape</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">()):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">shape</span> <span class="o">=</span> <span class="n">shape</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="k">def</span> <span class="nf">_log_prob</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">condition</span><span class="p">:</span> <span class="n">Array</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">jstats</span><span class="o">.</span><span class="n">cauchy</span><span class="o">.</span><span class="n">logpdf</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">_sample</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="p">:</span> <span class="n">jr</span><span class="o">.</span><span class="n">KeyArray</span><span class="p">,</span> <span class="n">condition</span><span class="p">:</span> <span class="n">Array</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">jr</span><span class="o">.</span><span class="n">cauchy</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="Cauchy"><a class="viewcode-back" href="../../api/distributions.html#flowjax.distributions.Cauchy">[docs]</a><span class="k">class</span> <span class="nc">Cauchy</span><span class="p">(</span><span class="n">Transformed</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Cauchy distribution (https://en.wikipedia.org/wiki/Cauchy_distribution).&quot;&quot;&quot;</span>
+
+    <span class="n">bijection</span><span class="p">:</span> <span class="n">Affine</span>
+
+<div class="viewcode-block" id="Cauchy.__init__"><a class="viewcode-back" href="../../api/distributions.html#flowjax.distributions.Cauchy.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">loc</span><span class="p">:</span> <span class="n">ArrayLike</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">scale</span><span class="p">:</span> <span class="n">ArrayLike</span> <span class="o">=</span> <span class="mi">1</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        `loc` and `scale` should broadcast to the dimension of the distribution.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            loc (Array): Location paramter.</span>
+<span class="sd">            scale (Array): Scale parameter. Defaults to 1.0.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">shape</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">broadcast_shapes</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">shape</span><span class="p">(</span><span class="n">loc</span><span class="p">),</span> <span class="n">jnp</span><span class="o">.</span><span class="n">shape</span><span class="p">(</span><span class="n">scale</span><span class="p">))</span>
+        <span class="n">base_dist</span> <span class="o">=</span> <span class="n">_StandardCauchy</span><span class="p">(</span><span class="n">shape</span><span class="p">)</span>
+        <span class="n">bijection</span> <span class="o">=</span> <span class="n">Affine</span><span class="p">(</span><span class="n">loc</span><span class="p">,</span> <span class="n">scale</span><span class="p">)</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">base_dist</span><span class="p">,</span> <span class="n">bijection</span><span class="p">)</span></div>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">loc</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Location of the distribution&quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">bijection</span><span class="o">.</span><span class="n">loc</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">scale</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;scale of the distribution&quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">bijection</span><span class="o">.</span><span class="n">scale</span></div>
+
+
+<span class="k">class</span> <span class="nc">_StandardStudentT</span><span class="p">(</span><span class="n">Distribution</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Implements student T distribution with specified degrees of freedom.&quot;&quot;&quot;</span>
+
+    <span class="n">log_df</span><span class="p">:</span> <span class="n">Array</span>
+
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">df</span><span class="p">:</span> <span class="n">Array</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">shape</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">shape</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">log_df</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">df</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">_log_prob</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">condition</span><span class="p">:</span> <span class="n">Array</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">jstats</span><span class="o">.</span><span class="n">t</span><span class="o">.</span><span class="n">logpdf</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">df</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">df</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">_sample</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">key</span><span class="p">:</span> <span class="n">jr</span><span class="o">.</span><span class="n">KeyArray</span><span class="p">,</span> <span class="n">condition</span><span class="p">:</span> <span class="n">Array</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">jr</span><span class="o">.</span><span class="n">t</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">df</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">df</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">df</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;The degrees of freedom of the distibution.&quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">log_df</span><span class="p">)</span>
+
+
+<div class="viewcode-block" id="StudentT"><a class="viewcode-back" href="../../api/distributions.html#flowjax.distributions.StudentT">[docs]</a><span class="k">class</span> <span class="nc">StudentT</span><span class="p">(</span><span class="n">Transformed</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Student T distribution (https://en.wikipedia.org/wiki/Student%27s_t-distribution).&quot;&quot;&quot;</span>
+
+    <span class="n">bijection</span><span class="p">:</span> <span class="n">Affine</span>
+    <span class="n">base_dist</span><span class="p">:</span> <span class="n">_StandardStudentT</span>
+
+<div class="viewcode-block" id="StudentT.__init__"><a class="viewcode-back" href="../../api/distributions.html#flowjax.distributions.StudentT.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">df</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">loc</span><span class="p">:</span> <span class="n">ArrayLike</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span> <span class="n">scale</span><span class="p">:</span> <span class="n">ArrayLike</span> <span class="o">=</span> <span class="mi">1</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        `df`, `loc` and `scale` broadcast to the dimension of the distribution.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            df (Array): The degrees of freedom.</span>
+<span class="sd">            loc (Array): Location parameter. Defaults to 0.0.</span>
+<span class="sd">            scale (Array): Scale parameter. Defaults to 1.0.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">df</span><span class="p">,</span> <span class="n">loc</span><span class="p">,</span> <span class="n">scale</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">broadcast_arrays</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">loc</span><span class="p">,</span> <span class="n">scale</span><span class="p">)</span>
+        <span class="n">base_dist</span> <span class="o">=</span> <span class="n">_StandardStudentT</span><span class="p">(</span><span class="n">df</span><span class="p">)</span>
+        <span class="n">bijection</span> <span class="o">=</span> <span class="n">Affine</span><span class="p">(</span><span class="n">loc</span><span class="p">,</span> <span class="n">scale</span><span class="p">)</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">base_dist</span><span class="p">,</span> <span class="n">bijection</span><span class="p">)</span></div>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">loc</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Location of the distribution&quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">bijection</span><span class="o">.</span><span class="n">loc</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">scale</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;scale of the distribution&quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">bijection</span><span class="o">.</span><span class="n">scale</span>
+
+    <span class="nd">@property</span>
+    <span class="k">def</span> <span class="nf">df</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;The degrees of freedom of the distribution.&quot;&quot;&quot;</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">base_dist</span><span class="o">.</span><span class="n">df</span></div>
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2022, Daniel Ward.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

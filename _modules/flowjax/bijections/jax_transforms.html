@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>flowjax.bijections.jax_transforms &mdash; FlowJax v9.0.0 documentation</title>
+      <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/copybutton.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/style.css" type="text/css" />
+  <!--[if lt IE 9]>
+    <script src="../../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js"></script>
+        <script src="../../../_static/doctools.js"></script>
+        <script src="../../../_static/sphinx_highlight.js"></script>
+        <script src="../../../_static/clipboard.min.js"></script>
+        <script src="../../../_static/copybutton.js"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../index.html" class="icon icon-home">
+            FlowJax
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Examples</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples/unconditional.html">Unconditional density estmation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples/conditional.html">Conditional density estimation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples/variational_inference.html">Variational inference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples/bounded.html">Bounded flows</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">API</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../api/bijections.html">Bijections</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api/distributions.html">Distributions</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api/flows.html">Flows</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api/training.html">Training</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Miscellaneous</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../faq.html">FAQ</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">FlowJax</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">flowjax.bijections.jax_transforms</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for flowjax.bijections.jax_transforms</h1><div class="highlight"><pre>
+<span></span><span class="sd">&quot;&quot;&quot;Bijections that wrap jax function transforms (scan and vmap).&quot;&quot;&quot;</span>
+<span class="kn">from</span> <span class="nn">functools</span> <span class="kn">import</span> <span class="n">partial</span>
+<span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Callable</span>
+
+<span class="kn">import</span> <span class="nn">equinox</span> <span class="k">as</span> <span class="nn">eqx</span>
+<span class="kn">from</span> <span class="nn">jax.lax</span> <span class="kn">import</span> <span class="n">scan</span>
+<span class="kn">import</span> <span class="nn">jax.numpy</span> <span class="k">as</span> <span class="nn">jnp</span>
+<span class="kn">from</span> <span class="nn">flowjax.bijections.bijection</span> <span class="kn">import</span> <span class="n">Bijection</span>
+
+
+<div class="viewcode-block" id="Batch"><a class="viewcode-back" href="../../../api/bijections.html#flowjax.bijections.Batch">[docs]</a><span class="k">class</span> <span class="nc">Batch</span><span class="p">(</span><span class="n">Bijection</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Add batch dimensions to a bijection, such that the new shape is</span>
+<span class="sd">    batch_shape + bijection.shape. The batch dimensions are added using multiple</span>
+<span class="sd">    applications of eqx.filter_vmap.</span>
+
+<span class="sd">    Example:</span>
+
+<span class="sd">    .. doctest::</span>
+
+<span class="sd">        &gt;&gt;&gt; import jax.numpy as jnp</span>
+<span class="sd">        &gt;&gt;&gt; from flowjax.bijections import Batch, Affine</span>
+<span class="sd">        &gt;&gt;&gt; x = jnp.ones(2)</span>
+<span class="sd">        &gt;&gt;&gt; batched = Batch(Affine(1), (2,), vectorize_bijection=False)</span>
+<span class="sd">        &gt;&gt;&gt; batched.transform(x)</span>
+<span class="sd">        Array([2., 2.], dtype=float32)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">bijection</span><span class="p">:</span> <span class="n">Bijection</span>
+    <span class="n">in_axes</span><span class="p">:</span> <span class="nb">tuple</span>
+    <span class="n">batch_shape</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
+
+<div class="viewcode-block" id="Batch.__init__"><a class="viewcode-back" href="../../../api/bijections.html#flowjax.bijections.Batch.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">bijection</span><span class="p">:</span> <span class="n">Bijection</span><span class="p">,</span>
+        <span class="n">batch_shape</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span>
+        <span class="n">vectorize_bijection</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+        <span class="n">vectorize_condition</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Args:</span>
+<span class="sd">            bijection (Bijection): Bijection to add batch dimensions to.</span>
+<span class="sd">            batch_shape (tuple[int, ...]): The shape of the batch dimension.</span>
+<span class="sd">            vectorize_bijection (bool): Whether to vectorise bijection parameters.</span>
+<span class="sd">                If True, we vectorize across the leading dimensions in the array</span>
+<span class="sd">                leaves of the bijection. In this case, the array leaves must</span>
+<span class="sd">                have leading dimensions equal to batch_shape. For construction of</span>
+<span class="sd">                compatible bijections, see ``eqx.filter_vmap``. If False: we broadcast</span>
+<span class="sd">                the parameters, i.e. the same bijection parameters are used for each x.</span>
+
+
+<span class="sd">            vectorize_condition (bool | None): Whether to vectorize or broadcast the</span>
+<span class="sd">                conditioning variables. If broadcasting, the condition shape is</span>
+<span class="sd">                unchanged. If vectorising, the condition shape will be</span>
+<span class="sd">                ``batch_shape + bijection.cond_shape``. Defaults to None.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">vectorize_condition</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">bijection</span><span class="o">.</span><span class="n">cond_shape</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">&quot;vectorize_condition must be specified for conditional bijections.&quot;</span>
+            <span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">in_axes</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">eqx</span><span class="o">.</span><span class="n">if_array</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span> <span class="k">if</span> <span class="n">vectorize_bijection</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="n">eqx</span><span class="o">.</span><span class="n">if_array</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">),</span>
+            <span class="mi">0</span> <span class="k">if</span> <span class="n">vectorize_condition</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">shape</span> <span class="o">=</span> <span class="n">batch_shape</span> <span class="o">+</span> <span class="n">bijection</span><span class="o">.</span><span class="n">shape</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">batch_shape</span> <span class="o">=</span> <span class="n">batch_shape</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">bijection</span> <span class="o">=</span> <span class="n">bijection</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">bijection</span><span class="o">.</span><span class="n">cond_shape</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="k">elif</span> <span class="n">vectorize_condition</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span> <span class="o">=</span> <span class="n">batch_shape</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">bijection</span><span class="o">.</span><span class="n">cond_shape</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">bijection</span><span class="o">.</span><span class="n">cond_shape</span></div>
+
+<div class="viewcode-block" id="Batch.transform"><a class="viewcode-back" href="../../../api/bijections.html#flowjax.bijections.Batch.transform">[docs]</a>    <span class="k">def</span> <span class="nf">transform</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">condition</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_argcheck</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>
+
+        <span class="k">def</span> <span class="nf">_transform</span><span class="p">(</span><span class="n">bijection</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">condition</span><span class="p">):</span>
+            <span class="k">return</span> <span class="n">bijection</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">multi_vmap</span><span class="p">(</span><span class="n">_transform</span><span class="p">)(</span><span class="bp">self</span><span class="o">.</span><span class="n">bijection</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="Batch.transform_and_log_det"><a class="viewcode-back" href="../../../api/bijections.html#flowjax.bijections.Batch.transform_and_log_det">[docs]</a>    <span class="k">def</span> <span class="nf">transform_and_log_det</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">condition</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_argcheck</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>
+
+        <span class="k">def</span> <span class="nf">_transform_and_log_det</span><span class="p">(</span><span class="n">bijection</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">condition</span><span class="p">):</span>
+            <span class="k">return</span> <span class="n">bijection</span><span class="o">.</span><span class="n">transform_and_log_det</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>
+
+        <span class="n">y</span><span class="p">,</span> <span class="n">log_det</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">multi_vmap</span><span class="p">(</span><span class="n">_transform_and_log_det</span><span class="p">)(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">bijection</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">condition</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="n">y</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">log_det</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="Batch.inverse"><a class="viewcode-back" href="../../../api/bijections.html#flowjax.bijections.Batch.inverse">[docs]</a>    <span class="k">def</span> <span class="nf">inverse</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">condition</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_argcheck</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>
+
+        <span class="k">def</span> <span class="nf">_inverse</span><span class="p">(</span><span class="n">bijection</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">condition</span><span class="p">):</span>
+            <span class="k">return</span> <span class="n">bijection</span><span class="o">.</span><span class="n">inverse</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">multi_vmap</span><span class="p">(</span><span class="n">_inverse</span><span class="p">)(</span><span class="bp">self</span><span class="o">.</span><span class="n">bijection</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="Batch.inverse_and_log_det"><a class="viewcode-back" href="../../../api/bijections.html#flowjax.bijections.Batch.inverse_and_log_det">[docs]</a>    <span class="k">def</span> <span class="nf">inverse_and_log_det</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">condition</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_argcheck</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>
+
+        <span class="k">def</span> <span class="nf">_inverse_and_log_det</span><span class="p">(</span><span class="n">bijection</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">condition</span><span class="p">):</span>
+            <span class="k">return</span> <span class="n">bijection</span><span class="o">.</span><span class="n">inverse_and_log_det</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>
+
+        <span class="n">x</span><span class="p">,</span> <span class="n">log_det</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">multi_vmap</span><span class="p">(</span><span class="n">_inverse_and_log_det</span><span class="p">)(</span><span class="bp">self</span><span class="o">.</span><span class="n">bijection</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">x</span><span class="p">,</span> <span class="n">jnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">log_det</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="Batch.multi_vmap"><a class="viewcode-back" href="../../../api/bijections.html#flowjax.bijections.Batch.multi_vmap">[docs]</a>    <span class="k">def</span> <span class="nf">multi_vmap</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">func</span><span class="p">:</span> <span class="n">Callable</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;Compose vmap to add ndim batch dimensions.&quot;&quot;&quot;</span>
+        <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">batch_shape</span><span class="p">)):</span>
+            <span class="n">func</span> <span class="o">=</span> <span class="n">eqx</span><span class="o">.</span><span class="n">filter_vmap</span><span class="p">(</span><span class="n">func</span><span class="p">,</span> <span class="n">in_axes</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">in_axes</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">func</span></div></div>
+
+
+<div class="viewcode-block" id="Scan"><a class="viewcode-back" href="../../../api/bijections.html#flowjax.bijections.Scan">[docs]</a><span class="k">class</span> <span class="nc">Scan</span><span class="p">(</span><span class="n">Bijection</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Repeatedly apply the same bijection with different parameter values. Internally,</span>
+<span class="sd">    uses `jax.lax.scan` to reduce compilation time.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="n">static</span><span class="p">:</span> <span class="n">Any</span>
+    <span class="n">params</span><span class="p">:</span> <span class="n">Any</span>
+
+<div class="viewcode-block" id="Scan.__init__"><a class="viewcode-back" href="../../../api/bijections.html#flowjax.bijections.Scan.__init__">[docs]</a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">bijection</span><span class="p">:</span> <span class="n">Bijection</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        The array leaves in `bijection` should have an additional leading axis to scan over.</span>
+<span class="sd">        Often it is convenient to construct these using `equinox.filter_vmap`.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            bijection (Bijection): A bijection, in which the arrays leaves have an</span>
+<span class="sd">                additional leading axis to scan over. For complex bijections, it can be</span>
+<span class="sd">                convenient to create compatible bijections with ``equinox.filter_vmap``.</span>
+
+<span class="sd">        Example:</span>
+<span class="sd">            Below is equivilent to ``Chain([Affine(p) for p in params])``.</span>
+
+<span class="sd">            .. doctest::</span>
+
+<span class="sd">                &gt;&gt;&gt; from flowjax.bijections import Scan, Affine</span>
+<span class="sd">                &gt;&gt;&gt; import jax.numpy as jnp</span>
+<span class="sd">                &gt;&gt;&gt; import equinox as eqx</span>
+<span class="sd">                &gt;&gt;&gt; params = jnp.ones((3, 2))</span>
+<span class="sd">                &gt;&gt;&gt; affine = Scan(Affine(params))</span>
+
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">params</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">static</span> <span class="o">=</span> <span class="n">eqx</span><span class="o">.</span><span class="n">partition</span><span class="p">(</span><span class="n">bijection</span><span class="p">,</span> <span class="n">eqx</span><span class="o">.</span><span class="n">is_array</span><span class="p">)</span>  <span class="c1"># type: ignore</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">shape</span> <span class="o">=</span> <span class="n">bijection</span><span class="o">.</span><span class="n">shape</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">cond_shape</span> <span class="o">=</span> <span class="n">bijection</span><span class="o">.</span><span class="n">cond_shape</span></div>
+
+<div class="viewcode-block" id="Scan.transform"><a class="viewcode-back" href="../../../api/bijections.html#flowjax.bijections.Scan.transform">[docs]</a>    <span class="k">def</span> <span class="nf">transform</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">condition</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_argcheck</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>
+
+        <span class="k">def</span> <span class="nf">step</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">params</span><span class="p">,</span> <span class="n">condition</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+            <span class="n">bijection</span> <span class="o">=</span> <span class="n">eqx</span><span class="o">.</span><span class="n">combine</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">static</span><span class="p">,</span> <span class="n">params</span><span class="p">)</span>
+            <span class="n">result</span> <span class="o">=</span> <span class="n">bijection</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>  <span class="c1"># type: ignore</span>
+            <span class="k">return</span> <span class="p">(</span><span class="n">result</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+
+        <span class="n">step</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">step</span><span class="p">,</span> <span class="n">condition</span><span class="o">=</span><span class="n">condition</span><span class="p">)</span>
+        <span class="n">y</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">scan</span><span class="p">(</span><span class="n">step</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">params</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">y</span></div>
+
+<div class="viewcode-block" id="Scan.transform_and_log_det"><a class="viewcode-back" href="../../../api/bijections.html#flowjax.bijections.Scan.transform_and_log_det">[docs]</a>    <span class="k">def</span> <span class="nf">transform_and_log_det</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">condition</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_argcheck</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>
+
+        <span class="k">def</span> <span class="nf">step</span><span class="p">(</span><span class="n">carry</span><span class="p">,</span> <span class="n">params</span><span class="p">,</span> <span class="n">condition</span><span class="p">):</span>
+            <span class="n">x</span><span class="p">,</span> <span class="n">log_det</span> <span class="o">=</span> <span class="n">carry</span>
+            <span class="n">bijection</span> <span class="o">=</span> <span class="n">eqx</span><span class="o">.</span><span class="n">combine</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">static</span><span class="p">,</span> <span class="n">params</span><span class="p">)</span>
+            <span class="n">y</span><span class="p">,</span> <span class="n">log_det_i</span> <span class="o">=</span> <span class="n">bijection</span><span class="o">.</span><span class="n">transform_and_log_det</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>  <span class="c1"># type: ignore</span>
+            <span class="k">return</span> <span class="p">((</span><span class="n">y</span><span class="p">,</span> <span class="n">log_det</span> <span class="o">+</span> <span class="n">log_det_i</span><span class="o">.</span><span class="n">sum</span><span class="p">()),</span> <span class="kc">None</span><span class="p">)</span>
+
+        <span class="n">step</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">step</span><span class="p">,</span> <span class="n">condition</span><span class="o">=</span><span class="n">condition</span><span class="p">)</span>
+        <span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">log_det</span><span class="p">),</span> <span class="n">_</span> <span class="o">=</span> <span class="n">scan</span><span class="p">(</span><span class="n">step</span><span class="p">,</span> <span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">params</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">y</span><span class="p">,</span> <span class="n">log_det</span></div>
+
+<div class="viewcode-block" id="Scan.inverse"><a class="viewcode-back" href="../../../api/bijections.html#flowjax.bijections.Scan.inverse">[docs]</a>    <span class="k">def</span> <span class="nf">inverse</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">condition</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_argcheck</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>
+
+        <span class="k">def</span> <span class="nf">step</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">params</span><span class="p">,</span> <span class="n">condition</span><span class="p">):</span>
+            <span class="n">bijection</span> <span class="o">=</span> <span class="n">eqx</span><span class="o">.</span><span class="n">combine</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">static</span><span class="p">,</span> <span class="n">params</span><span class="p">)</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">bijection</span><span class="o">.</span><span class="n">inverse</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>  <span class="c1"># type: ignore</span>
+            <span class="k">return</span> <span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+
+        <span class="n">step</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">step</span><span class="p">,</span> <span class="n">condition</span><span class="o">=</span><span class="n">condition</span><span class="p">)</span>
+        <span class="n">x</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">scan</span><span class="p">(</span><span class="n">step</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">params</span><span class="p">,</span> <span class="n">reverse</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">x</span></div>
+
+<div class="viewcode-block" id="Scan.inverse_and_log_det"><a class="viewcode-back" href="../../../api/bijections.html#flowjax.bijections.Scan.inverse_and_log_det">[docs]</a>    <span class="k">def</span> <span class="nf">inverse_and_log_det</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">condition</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_argcheck</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>
+
+        <span class="k">def</span> <span class="nf">step</span><span class="p">(</span><span class="n">carry</span><span class="p">,</span> <span class="n">params</span><span class="p">,</span> <span class="n">condition</span><span class="p">):</span>
+            <span class="n">y</span><span class="p">,</span> <span class="n">log_det</span> <span class="o">=</span> <span class="n">carry</span>
+            <span class="n">bijection</span> <span class="o">=</span> <span class="n">eqx</span><span class="o">.</span><span class="n">combine</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">static</span><span class="p">,</span> <span class="n">params</span><span class="p">)</span>
+            <span class="n">x</span><span class="p">,</span> <span class="n">log_det_i</span> <span class="o">=</span> <span class="n">bijection</span><span class="o">.</span><span class="n">inverse_and_log_det</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">condition</span><span class="p">)</span>  <span class="c1"># type: ignore</span>
+            <span class="k">return</span> <span class="p">((</span><span class="n">x</span><span class="p">,</span> <span class="n">log_det</span> <span class="o">+</span> <span class="n">log_det_i</span><span class="o">.</span><span class="n">sum</span><span class="p">()),</span> <span class="kc">None</span><span class="p">)</span>
+
+        <span class="n">step</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">step</span><span class="p">,</span> <span class="n">condition</span><span class="o">=</span><span class="n">condition</span><span class="p">)</span>
+        <span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">log_det</span><span class="p">),</span> <span class="n">_</span> <span class="o">=</span> <span class="n">scan</span><span class="p">(</span><span class="n">step</span><span class="p">,</span> <span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="bp">self</span><span class="o">.</span><span class="n">params</span><span class="p">,</span> <span class="n">reverse</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">y</span><span class="p">,</span> <span class="n">log_det</span></div></div>
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2022, Daniel Ward.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
