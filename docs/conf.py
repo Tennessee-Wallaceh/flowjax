@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.abspath(".."))
 project = "FlowJax"
 copyright = "2022, Daniel Ward"
 author = "Daniel Ward"
-release = "v8.1.0"
+release = "v9.0.0"
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
@@ -47,3 +47,6 @@ html_css_files = [
 html_theme_options = {
     "navigation_depth": 2,
 }
+
+pygments_style = "xcode"
+autodoc_typehints = "none"
