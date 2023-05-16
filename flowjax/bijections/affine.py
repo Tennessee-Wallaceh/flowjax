@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Callable
 
 import jax.numpy as jnp
 from jax.experimental import checkify
@@ -7,46 +7,115 @@ from jax.scipy.linalg import solve_triangular
 from flowjax.bijections import Bijection
 from flowjax.utils import Array
 from jax.experimental import checkify
-
+import jax.random as jr
 
 class Affine(Bijection):
     loc: Array
-    log_scale: Array
-    
-    def __init__(self, loc: Array=0, scale: Array=1):
-        """Elementwise affine transformation y = ax + b. loc and scale should broadcast
-        to the desired shape of the bijection.
+    unc_scale: Array
+    def __init__(self, key):
+        """
+        Elementwise affine transformation y = ax + b.
 
         Args:
-            loc (int, optional): Location parameter. Defaults to 0.
-            scale (int, optional): Scale parameter. Defaults to 1.
+            key: used to initialise the bijection
         """
-        loc, scale = [jnp.asarray(a, dtype=jnp.float32) for a in (loc, scale)]
-        self.shape = jnp.broadcast_shapes(jnp.shape(loc), jnp.shape(scale))
+        self.shape = ()
         self.cond_shape = None
 
-        self.loc = jnp.broadcast_to(loc, self.shape)
-        self.log_scale = jnp.broadcast_to(jnp.log(scale), self.shape)
+        loc_key, scale_key = jr.split(key)
+        self.loc = jr.normal(loc_key, shape)
+        self.unc_scale = jr.normal(scale_key, shape)
 
-    def transform(self, x, condition=None):
+    def transform(self, x, condition=()):
         self._argcheck(x)
         return x * self.scale + self.loc
 
-    def transform_and_log_abs_det_jacobian(self, x, condition=None):
+    def transform_and_log_abs_det_jacobian(self, x, condition=()):
         self._argcheck(x)
-        return x * self.scale + self.loc, self.log_scale.sum()
+        return x * self.scale + self.loc, jnp.log(self.scale)
 
-    def inverse(self, y, condition=None):
+    def inverse(self, y, condition=()):
         self._argcheck(y)
         return (y - self.loc) / self.scale
 
-    def inverse_and_log_abs_det_jacobian(self, y, condition=None):
+    def inverse_and_log_abs_det_jacobian(self, y, condition=()):
         self._argcheck(y)
-        return (y - self.loc) / self.scale, -self.log_scale.sum()
+        return (y - self.loc) / self.scale, -jnp.log(self.scale)
 
     @property
     def scale(self):
-        return jnp.exp(self.log_scale)
+        return jnp.exp(self.unc_scale)
+
+
+class Scale(Bijection):
+    unc_scale: Array
+    scale_transform: Callable
+    def __init__(self, scale: Array=jnp.array(1.)):
+        """Elementwise affine transformation y = ax. loc and scale should broadcast
+        to the desired shape of the bijection.
+
+        Args:
+            scale (int, optional): Scale parameter. Defaults to 1.
+        """
+        self.shape = jnp.shape(scale)
+        self.cond_shape = None
+
+        self.scale_transform = domain_transformations.Softplus(1e-6)
+        self.unc_scale = jnp.broadcast_to(self.scale_transform.inverse(scale), self.shape)
+
+    def transform(self, x, condition=None):
+        self._argcheck(x)
+        return x * self.scale
+
+    def transform_and_log_abs_det_jacobian(self, x, condition=None):
+        self._argcheck(x)
+        return x * self.scale, jnp.log(self.scale).sum()
+
+    def inverse(self, y, condition=None):
+        self._argcheck(y)
+        return y / self.scale
+
+    def inverse_and_log_abs_det_jacobian(self, y, condition=None):
+        self._argcheck(y)
+        return y / self.scale, -jnp.log(self.scale).sum()
+
+    @property
+    def scale(self):
+        return self.scale_transform.transform(self.unc_scale)
+
+
+class Loc(Bijection):
+    loc: Array
+    def __init__(self, loc: Array=0,):
+        """Elementwise affine transformation y = x + b. loc
+
+        Args:
+            loc (int, optional): Location parameter. Defaults to 0.
+        """
+        loc = jnp.asarray(loc, dtype=jnp.float32)
+        self.shape = jnp.shape(loc)
+        self.cond_shape = None
+        self.loc = jnp.broadcast_to(loc, self.shape)
+
+    def transform(self, x, condition=None):
+        self._argcheck(x)
+        return x + self.loc
+
+    def transform_and_log_abs_det_jacobian(self, x, condition=None):
+        self._argcheck(x)
+        return x + self.loc, jnp.zeros_like(self.loc)
+
+    def inverse(self, y, condition=None):
+        self._argcheck(y)
+        return y - self.loc
+
+    def inverse_and_log_abs_det_jacobian(self, y, condition=None):
+        self._argcheck(y)
+        return y - self.loc, jnp.zeros_like(self.loc)
+
+    @property
+    def scale(self):
+        return self.scale_transform.transform(self.unc_scale)
 
 
 class TriangularAffine(Bijection):

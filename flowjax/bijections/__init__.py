@@ -1,7 +1,7 @@
 """Bijections from ``flowjax.bijections``"""
 
 from .bijection import Bijection
-from .affine import AdditiveLinearCondition, Affine, TriangularAffine
+from .affine import Scale, Loc, AdditiveLinearCondition, Affine, TriangularAffine
 from .block_autoregressive_network import BlockAutoregressiveNetwork
 from .chain import Chain
 from .coupling import Coupling
@@ -32,4 +32,6 @@ __all__ = [
     "Partial",
     "EmbedCondition",
     "RationalQuadraticSpline",
+    "Loc",
+    "Scale",
 ]

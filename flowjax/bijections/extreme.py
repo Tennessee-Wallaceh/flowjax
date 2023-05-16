@@ -113,6 +113,29 @@ def _shift_power_inverse_and_lad(x, tail_param):
     return transformed, lad
 
 """
+The sinh-arcsinh transformations
+"""
+def _sinh_arcsinh_transform(z, tail_param):
+    return jnp.sinh(tail_param * jnp.arcsinh(z))
+
+def _sinh_arcsinh_transform_and_lad(z, tail_param):
+    x = jnp.sinh(tail_param * jnp.arcsinh(z))
+    lad = jnp.log(jnp.cosh((jnp.arcsinh(x)) / tail_param)) 
+    lad -= jnp.log(tail_param)
+    lad -= 0.5 * jnp.log(1 + x ** 2)
+    return x, -lad
+
+def _sinh_arcsinh_inverse(x, tail_param):
+    return jnp.sinh(jnp.arcsinh(x) / tail_param)
+           
+def _sinh_arcsinh_inverse_and_lad(x, tail_param):
+    z = jnp.sinh(jnp.arcsinh(x) / tail_param)
+    lad = jnp.log(jnp.cosh((jnp.arcsinh(x)) / tail_param)) 
+    lad -= jnp.log(tail_param)
+    lad -= 0.5 * jnp.log(1 + x ** 2)
+    return z, lad
+
+"""
 The extreme value bijection classes which tie together the above 
 scalar transformations.
 """
@@ -121,7 +144,7 @@ class ExtremeValueActivation(Bijection):
     ExtremeValueActivation (D. Prangle, T. Hickling)
     This transform is Reals -> Reals.
     """
-    MIN_TAIL_PARAM = 1e-8
+    MIN_TAIL_PARAM = 1e-3
     pos_tail_unc: Array
     neg_tail_unc: Array
     parameter_transformation: Callable
@@ -165,6 +188,37 @@ class ExtremeValueActivation(Bijection):
         return sign * z, lad
 
 
+class SinhArcsinh(Bijection):
+    """
+    SinhArcsinh (T. Hickling)
+    This transform is Reals -> Reals.
+    """
+    MIN_TAIL_PARAM = 0.99
+    tail_unc: Array
+    parameter_transformation: Callable
+    def __init__(self, tail_init, parameter_transformation=domain_transformations.Softplus):
+        self.shape = ()
+        self.cond_shape = None
+        self.parameter_transformation = parameter_transformation(self.MIN_TAIL_PARAM)
+        self.tail_unc = self.parameter_transformation.inverse(tail_init)
+
+    @property
+    def tail_param(self):
+        return self.parameter_transformation.transform(self.tail_unc)
+
+    def transform(self, z, condition):
+        return _sinh_arcsinh_transform(z, self.tail_param)
+
+    def transform_and_log_abs_det_jacobian(self, z, condition):
+        return _sinh_arcsinh_transform_and_lad(z, self.tail_param)
+
+    def inverse(self, x, condition):
+        return _sinh_arcsinh_inverse(x, self.tail_param)
+
+    def inverse_and_log_abs_det_jacobian(self, x, condition):
+        return _sinh_arcsinh_inverse_and_lad(x, self.tail_param)
+
+
 class TailTransformation(Bijection):
     """
     TailTransformation (D. Prangle, T. Hickling)
@@ -174,21 +228,23 @@ class TailTransformation(Bijection):
     MIN_TAIL_PARAM = 1e-8
     pos_tail_unc: Array
     neg_tail_unc: Array
+    target_domain: tuple[float, float]
     parameter_transformation: Callable
-    def __init__(self, pos_tail_init, neg_tail_init):
-        self.pos_tail_unc = jnp.array(jnp.log(pos_tail_init))
-        self.neg_tail_unc = jnp.array(jnp.log(neg_tail_init))
+    def __init__(self, pos_tail_init, neg_tail_init, target_domain=(-1, 1)):
+        self.parameter_transformation = domain_transformations.Softplus(min=self.MIN_TAIL_PARAM)
+        self.pos_tail_unc = self.parameter_transformation.inverse(pos_tail_init)
+        self.neg_tail_unc = self.parameter_transformation.inverse(neg_tail_init)
         self.shape = ()
         self.cond_shape = None
-        self.parameter_transformation = domain_transformations.softplus
+        self.target_domain = target_domain
 
     @property
     def pos_tail(self):
-        return self.parameter_transformation(self.pos_tail_unc, self.MIN_TAIL_PARAM)
+        return self.parameter_transformation.transform(self.pos_tail_unc)
     
     @property
     def neg_tail(self):
-        return self.parameter_transformation(self.pos_tail_unc, self.MIN_TAIL_PARAM)
+        return self.parameter_transformation.transform(self.neg_tail_unc)
 
     def transform(self, u, condition=None):
         sign = jnp.sign(u)
@@ -206,13 +262,15 @@ class TailTransformation(Bijection):
         sign = jnp.sign(x)
         tail_param = jnp.where(sign > 0, self.pos_tail, self.neg_tail)
         u = _tail_inverse(jnp.abs(x), tail_param)
-        return u
+        u = (u - self.target_domain[0]) / (self.target_domain[1] - self.target_domain[0])
+        return sign * u
 
     def inverse_and_log_abs_det_jacobian(self, x, condition=None):
         sign = jnp.sign(x)
         tail_param = jnp.where(sign > 0, self.pos_tail, self.neg_tail)
         u, lad = _tail_inverse_and_lad(jnp.abs(x), tail_param)
-        return sign * u, lad
+        u = (u - self.target_domain[0]) / (self.target_domain[1] - self.target_domain[0])
+        return sign * u, lad - jnp.log(self.target_domain[1] - self.target_domain[0])
 
 
 class Switch(Bijection):
@@ -250,7 +308,7 @@ class Switch(Bijection):
         return jnp.abs(self.neg_tail)
     
     """
-    The light tail parameters are in [-1, 0]
+    The light tail parameters are mapped [-1, 0] -> [1, 2]
     """
     @property
     def light_pos_tail(self):
@@ -328,3 +386,60 @@ class Switch(Bijection):
 
         return z, lad
 
+
+class Kuma(Bijection):
+    MIN_PARAM = 0.01
+    a_unc: Array
+    b_unc: Array
+    min: float
+    max: float
+    parameter_transformation: Callable
+    def __init__(self, a_init, b_init, parameter_transformation=domain_transformations.Softplus):
+        self.shape = ()
+        self.cond_shape = None
+        self.parameter_transformation = parameter_transformation(self.MIN_PARAM)
+        self.a_unc = self.parameter_transformation.inverse(a_init)
+        self.b_unc = self.parameter_transformation.inverse(b_init)
+        self.min = -1.
+        self.max = 1.
+
+    @property
+    def a(self):
+        return self.parameter_transformation.transform(self.a_unc)
+    
+    @property
+    def b(self):
+        return self.parameter_transformation.transform(self.b_unc)
+
+    def transform(self, z, condition):
+        inner = jnp.power(1 - z, 1 /  self.b)
+        x = jnp.power(1 - inner, 1 / self.a)
+        return self.min + x * (self.max - self.min)
+
+    def transform_and_log_abs_det_jacobian(self, z, condition):
+        inner = jnp.power(1 - z, 1 /  self.b)
+        x = jnp.power(1 - inner, 1 / self.a)
+        lad = (self.b - 1) * jnp.log(1 - jnp.power(x, self.a))
+        lad += jnp.log(self.a * self.b)
+        lad += (self.a - 1) * jnp.log(x)
+        lad -= jnp.log(self.max - self.min)
+        x = self.min + x * (self.max - self.min)
+        return x, -lad
+    
+    def inverse(self, x, condition):
+        x = (x - self.min) / (self.max - self.min)
+        u = 1 - jnp.power(1 - jnp.power(x, self.a), self.b)
+        return u
+
+    def inverse_and_log_abs_det_jacobian(self, x, condition):
+        x = jnp.clip(
+            (x - self.min) / (self.max - self.min),
+            a_min=1e-4,
+            a_max=1 - 1e-4,
+        )
+        u = 1 - jnp.power(1 - jnp.power(x, self.a), self.b)
+        lad = (self.b - 1) * jnp.log(1 - jnp.power(x, self.a))
+        lad += jnp.log(self.a * self.b)
+        lad += (self.a - 1) * jnp.log(x)
+        lad -= jnp.log(self.max - self.min)
+        return u, lad

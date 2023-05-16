@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Optional, Tuple, Union, Sequence
+from typing import Optional, Tuple, Union, Sequence, Callable
 
 import equinox as eqx
 import jax.numpy as jnp
@@ -250,40 +250,6 @@ class Distribution(eqx.Module, ABC):
     @property
     def cond_ndim(self):
         return len(self.cond_shape)
-
-
-class JointIndepdendant(Distribution):
-    """
-    Implements a joint distribution of independent distributions.
-    The implementaion could probably be better.
-    """
-    distributions: dict[int, Distribution] # each distribution is univariate
-    sample: callable
-    log_prob: callable
-    def __init__(self, *dists, cond_dim=0) -> None:
-        super().__init__(dim=len(dists), cond_dim=cond_dim)
-        self.distributions = {}
-        for dim, dist in enumerate(dists):
-            self.distributions[dim] = dist
-
-    def sample(self, key: jr.KeyArray, condition: Optional[Array] = None, n: int = None):
-        keys = random.split(key, len(self.distributions))
-        return jnp.hstack([
-            dist.sample(keys[dim], n=n).reshape(-1, 1)
-            for dim, dist in enumerate(self.distributions.values())
-        ])
-    
-    def log_prob(self, x: Array, condition: Optional[Array] = None):
-        return jnp.hstack([
-            dist.log_prob(x[:, [dim]]).reshape(-1, 1)
-            for dim, dist in enumerate(self.distributions.values())
-        ]).sum(axis=1)
-
-    def _log_prob(self, x: Array, condition: Optional[Array] = None):
-        pass
-
-    def _sample(self, key: jr.KeyArray, condition: Optional[Array] = None):
-        pass
 
 
 class Transformed(Distribution):
@@ -551,24 +517,38 @@ class Cauchy(Transformed):
         return self.bijection.scale
 
 
-class _StandardStudentT(Distribution):
+class StandardStudentT(Distribution):
     """
     Implements student T distribution with specified degrees of freedom.
     """
     MIN_DF = 1e-6
-    MAX_DF = 1e4
+    MAX_DF = 1e3
     log_df: Array
+    min_chi2: Array
+    min_log_prob: Array
     def __init__(self, df: Array):
         self.shape = df.shape
         self.cond_shape = None
         self.log_df = jnp.log(df)
+        self.min_chi2 = jax.lax.stop_gradient(jnp.finfo(df).tiny * 1e13)
+        self.min_log_prob = jax.lax.stop_gradient(
+            jnp.finfo(df).min / df.size
+        )
 
     def _log_prob(self, x: Array, condition: Optional[Array] = None):
-        return jstats.t.logpdf(x, df=self.df).sum()
+        return jnp.clip(
+            jstats.t.logpdf(x, df=self.df),
+            a_min=self.min_log_prob,
+        ).sum()
 
     def _sample(self, key: jr.KeyArray, condition: Optional[Array] = None):
-        return jr.t(key, df=self.df, shape=self.shape)
-
+        # return jr.t(key, df=self.df, shape=self.shape)
+        key_n, key_c = jr.split(key)
+        x = jr.normal(key_n, self.shape)
+        z = jr.chisquare(key_c, df=self.df, shape=self.shape)
+        z = jnp.clip(z, a_min=self.min_chi2)
+        return x * jax.lax.rsqrt(z / self.df)
+    
     @property
     def df(self):
         return jnp.clip(jnp.exp(self.log_df), self.MIN_DF, self.MAX_DF)
@@ -653,22 +633,34 @@ class NealsFunnel(Distribution):
         std = jnp.exp(self.funnel_scale * x_1)
         x_2 = jr.normal(key_2, (self.shape[0] - 1,)) * std
         return jnp.hstack([x_1, x_2])
-
+    
 
 class IndependentJoint(Distribution):
-    distributions: Sequence[Distribution]
+    dists: Sequence[Distribution]
+    log_probs: Sequence[Callable]
+    samplers: Sequence[Callable]
     dims: Array
     def __init__(self, distributions):
         self.shape = (len(distributions),)
         self.cond_shape = None
-        self.distributions = distributions
+        self.dists = distributions
+        self.log_probs = [_dist.log_prob for _dist in distributions]
+        self.samplers = [_dist.sample for _dist in distributions]
         self.dims = jnp.arange(self.shape[0])
  
     def _log_prob(self, x: Array, condition: Optional[Array] = None):
-        log_probs = [getattr(dist, '_log_prob') for dist in self.distributions]
-        return jax.vmap(lambda ix, x: jax.lax.switch(ix, log_probs, x))(self.dims, x).sum()
+        def _dim_log_prob(log_prob, ix): 
+            return jax.lax.switch(ix, [_dist.log_prob for _dist in self.dists], x[ix]) + log_prob, 0
+    
+        log_prob, _ = jax.lax.scan(_dim_log_prob, 0, self.dims)
+        return log_prob
 
     def _sample(self, key, condition: Optional[Array] = None):
-        samplers = [getattr(dist, '_sample') for dist in self.distributions]
         keys = jr.split(key, self.shape[0])
-        return jax.vmap(lambda ix, key: jax.lax.switch(ix, samplers, key))(self.dims, keys)
+        def _dim_sample(log_prob, ix): 
+            _x = jax.lax.switch(
+                ix, [_dist.sample for _dist in self.dists], keys[ix]
+            )
+            return None, _x
+        _, x = jax.lax.scan(_dim_sample, None, self.dims)
+        return x
