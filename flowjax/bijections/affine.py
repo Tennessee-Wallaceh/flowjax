@@ -5,9 +5,9 @@ from jax import Array
 from jax.experimental import checkify
 from jax.scipy.linalg import solve_triangular
 from jax.typing import ArrayLike
+import jax.random as jr
 
 from flowjax.bijections.bijection import Bijection
-
 
 class Affine(Bijection):
     """Elementwise affine transformation ``y = a*x + b``. loc and scale should broadcast
@@ -15,45 +15,45 @@ class Affine(Bijection):
     """
 
     loc: Array
-    unc_scale: Array
-    def __init__(self, key):
-        """
-        Elementwise affine transformation y = ax + b.
+    log_scale: Array
 
-        Args:
-            key: used to initialise the bijection
+    def __init__(self, loc: ArrayLike = 0, scale: ArrayLike = 1):
         """
-        self.shape = ()
+        Args:
+            loc (ArrayLike): Location parameter. Defaults to 0.
+            scale (ArrayLike): Scale parameter. Defaults to 1.
+        """
+        loc, scale = [jnp.asarray(a, dtype=jnp.float32) for a in (loc, scale)]
+        self.shape = jnp.broadcast_shapes(jnp.shape(loc), jnp.shape(scale))
         self.cond_shape = None
 
-        loc_key, scale_key = jr.split(key)
-        self.loc = jr.normal(loc_key, shape)
-        self.unc_scale = jr.normal(scale_key, shape)
+        self.loc = jnp.broadcast_to(loc, self.shape)
+        self.log_scale = jnp.broadcast_to(jnp.log(scale), self.shape)
 
-    def transform(self, x, condition=()):
+    def transform(self, x, condition=None):
         self._argcheck(x)
         return x * self.scale + self.loc
 
-    def transform_and_log_abs_det_jacobian(self, x, condition=()):
+    def transform_and_log_det(self, x, condition=None):
         self._argcheck(x)
-        return x * self.scale + self.loc, jnp.log(self.scale)
+        return x * self.scale + self.loc, self.log_scale.sum()
 
-    def inverse(self, y, condition=()):
+    def inverse(self, y, condition=None):
         self._argcheck(y)
         return (y - self.loc) / self.scale
 
-    def inverse_and_log_abs_det_jacobian(self, y, condition=()):
+    def inverse_and_log_det(self, y, condition=None):
         self._argcheck(y)
-        return (y - self.loc) / self.scale, -jnp.log(self.scale)
+        return (y - self.loc) / self.scale, -self.log_scale.sum()
 
     @property
     def scale(self):
-        return jnp.exp(self.unc_scale)
+        """The scale parameter of the affine transformation."""
+        return jnp.exp(self.log_scale)
 
 
 class Scale(Bijection):
     unc_scale: Array
-    scale_transform: Callable
     def __init__(self, scale: Array=jnp.array(1.)):
         """Elementwise affine transformation y = ax. loc and scale should broadcast
         to the desired shape of the bijection.
@@ -63,8 +63,7 @@ class Scale(Bijection):
         """
         self.shape = jnp.shape(scale)
         self.cond_shape = None
-
-        self.loc = jnp.broadcast_to(loc, self.shape)
+        self.scale = scale
 
     def transform(self, x, condition=None):
         self._argcheck(x)

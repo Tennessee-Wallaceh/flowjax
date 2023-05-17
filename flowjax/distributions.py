@@ -15,7 +15,7 @@ from jax.typing import ArrayLike
 
 from flowjax.bijections import Affine, Bijection
 from flowjax.utils import _get_ufunc_signature, merge_cond_shapes
-
+from typing import Callable, Sequence
 
 class Distribution(eqx.Module):
     """Distribution base class. Distributions all have an attribute ``shape``,
@@ -389,10 +389,10 @@ class HalfNormal(Distribution):
         self.shape = ()
         self.cond_shape = None
 
-    def _log_prob(self, x: Array, condition: Optional[Array] = None):
+    def _log_prob(self, x: Array, condition: Array | None = None):
         return jstats.norm.logpdf(jnp.abs(x)) + jnp.log(2)
 
-    def _sample(self, key: jr.KeyArray, condition: Optional[Array] = None):
+    def _sample(self, key: jr.KeyArray, condition: Array | None = None):
         return jnp.abs(jr.normal(key))
         
 class StandardUniform(Distribution):
@@ -590,7 +590,7 @@ class StudentT(Transformed):
     """Student T distribution (https://en.wikipedia.org/wiki/Student%27s_t-distribution)."""
 
     bijection: Affine
-    base_dist: _StandardStudentT
+    base_dist: StandardStudentT
 
     def __init__(self, df: Array, loc: ArrayLike = 0, scale: ArrayLike = 1):
         """
@@ -602,7 +602,7 @@ class StudentT(Transformed):
             scale (Array): Scale parameter. Defaults to 1.0.
         """
         df, loc, scale = jnp.broadcast_arrays(df, loc, scale)
-        base_dist = _StandardStudentT(df)
+        base_dist = StandardStudentT(df)
         bijection = Affine(loc, scale)
         super().__init__(base_dist, bijection)
 
@@ -629,13 +629,13 @@ class HalfStudentT(Distribution):
         self.cond_dim = 0
         self.unc_df = jnp.log(jnp.array([df]))
 
-    def _log_prob(self, x: Array, condition: Optional[Array] = None):
+    def _log_prob(self, x: Array, condition: Array | None = None):
         return jnp.clip(
             jnp.log(2) + jstats.t.logpdf(x, df=jnp.exp(self.unc_df)),
             a_min=jnp.log(1e-37)
         ) 
 
-    def _sample(self, key: jr.KeyArray, condition: Optional[Array] = None):
+    def _sample(self, key: jr.KeyArray, condition: Array | None= None):
         df = jnp.exp(self.unc_df)
         beta = jr.beta(key, 0.5 * df, 0.5, shape=(self.dim,))
         x = jnp.sqrt(df / beta - df)
@@ -684,14 +684,14 @@ class IndependentJoint(Distribution):
         self.samplers = [_dist.sample for _dist in distributions]
         self.dims = jnp.arange(self.shape[0])
  
-    def _log_prob(self, x: Array, condition: Optional[Array] = None):
+    def _log_prob(self, x: Array, condition: Array | None = None):
         def _dim_log_prob(log_prob, ix): 
             return jax.lax.switch(ix, [_dist.log_prob for _dist in self.dists], x[ix]) + log_prob, 0
     
         log_prob, _ = jax.lax.scan(_dim_log_prob, 0, self.dims)
         return log_prob
 
-    def _sample(self, key, condition: Optional[Array] = None):
+    def _sample(self, key, condition: Array | None = None):
         keys = jr.split(key, self.shape[0])
         def _dim_sample(log_prob, ix): 
             _x = jax.lax.switch(
