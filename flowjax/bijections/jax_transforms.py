@@ -103,16 +103,18 @@ class Batch(Bijection):
 
     def inverse_and_log_det(self, y, condition=None):
         self._argcheck(y, condition)
-        f = lambda bijection, x: bijection.inverse_and_log_abs_det_jacobian(x, condition)
-        f = self._multivmap(f)
-        x, log_det = f(self.bijection, y)
-        return x, log_det.sum()
 
-    def _multivmap(self, f):
-        "Compose Vmap to add ndim batch dimensions."
-        for _ in range(self.ndim_to_add):
-            f = eqx.filter_vmap(f, **self.kwargs)
-        return f
+        def _inverse_and_log_det(bijection, x, condition):
+            return bijection.inverse_and_log_det(x, condition)
+
+        x, log_det = self.multi_vmap(_inverse_and_log_det)(self.bijection, y, condition)
+        return x, jnp.sum(log_det)
+
+    def multi_vmap(self, func: Callable) -> Callable:
+        """Compose vmap to add ndim batch dimensions."""
+        for _ in range(len(self.batch_shape)):
+            func = eqx.filter_vmap(func, in_axes=self.in_axes)
+        return func
 
 
 class Scan(Bijection):
