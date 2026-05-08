@@ -1,17 +1,14 @@
 """Affine bijections."""
 
 from collections.abc import Callable
-from functools import partial
 from typing import ClassVar
 
 import jax.numpy as jnp
-from jax.nn import softplus
 from jax.scipy.linalg import solve_triangular
 from jaxtyping import Array, ArrayLike, Shaped
-from paramax import AbstractUnwrappable, Parameterize, unwrap
-from paramax.utils import inv_softplus
 
 from flowjax.bijections.bijection import AbstractBijection
+from flowjax.parameters import PositiveParameter, TriangularParameter
 from flowjax.utils import arraylike_to_array
 
 
@@ -31,7 +28,7 @@ class Affine(AbstractBijection):
     shape: tuple[int, ...]
     cond_shape: ClassVar[None] = None
     loc: Array
-    scale: Array | AbstractUnwrappable[Array]
+    scale: PositiveParameter
 
     def __init__(
         self,
@@ -42,13 +39,15 @@ class Affine(AbstractBijection):
             *(arraylike_to_array(a, dtype=float) for a in (loc, scale)),
         )
         self.shape = scale.shape
-        self.scale = Parameterize(softplus, inv_softplus(scale))
+        self.scale = PositiveParameter(scale)
 
     def transform_and_log_det(self, x, condition=None):
-        return x * self.scale + self.loc, jnp.log(jnp.abs(self.scale)).sum()
+        return x * self.scale.value + self.loc, jnp.log(jnp.abs(self.scale.value)).sum()
 
     def inverse_and_log_det(self, y, condition=None):
-        return (y - self.loc) / self.scale, -jnp.log(jnp.abs(self.scale)).sum()
+        return (y - self.loc) / self.scale.value, -jnp.log(
+            jnp.abs(self.scale.value)
+        ).sum()
 
 
 class Loc(AbstractBijection):
@@ -82,21 +81,21 @@ class Scale(AbstractBijection):
 
     shape: tuple[int, ...]
     cond_shape: ClassVar[None] = None
-    scale: Array | AbstractUnwrappable[Array]
+    scale: PositiveParameter
 
     def __init__(
         self,
         scale: ArrayLike,
     ):
         scale = arraylike_to_array(scale, "scale", dtype=float)
-        self.scale = Parameterize(softplus, inv_softplus(scale))
-        self.shape = jnp.shape(unwrap(scale))
+        self.scale = PositiveParameter(scale)
+        self.shape = jnp.shape(scale)
 
     def transform_and_log_det(self, x, condition=None):
-        return x * self.scale, jnp.log(jnp.abs(self.scale)).sum()
+        return x * self.scale.value, jnp.log(jnp.abs(self.scale.value)).sum()
 
     def inverse_and_log_det(self, y, condition=None):
-        return y / self.scale, -jnp.log(jnp.abs(self.scale)).sum()
+        return y / self.scale.value, -jnp.log(jnp.abs(self.scale.value)).sum()
 
 
 class TriangularAffine(AbstractBijection):
@@ -119,7 +118,7 @@ class TriangularAffine(AbstractBijection):
     shape: tuple[int, ...]
     cond_shape: ClassVar[None] = None
     loc: Array
-    triangular: Array | AbstractUnwrappable[Array]
+    triangular: TriangularParameter
     lower: bool
 
     def __init__(
@@ -133,25 +132,18 @@ class TriangularAffine(AbstractBijection):
         if (arr.ndim != 2) or (arr.shape[0] != arr.shape[1]):
             raise ValueError("arr must be a square, 2-dimensional matrix.")
         dim = arr.shape[0]
-        arr = jnp.fill_diagonal(arr, inv_softplus(jnp.diag(arr)), inplace=False)
-
-        @partial(jnp.vectorize, signature="(d,d)->(d,d)")
-        def _to_triangular(arr):
-            tri = jnp.tril(arr) if lower else jnp.triu(arr)
-            return jnp.fill_diagonal(tri, softplus(jnp.diag(tri)), inplace=False)
-
-        self.triangular = Parameterize(_to_triangular, arr)
+        self.triangular = TriangularParameter(arr, lower=lower)
         self.lower = lower
         self.shape = (dim,)
         self.loc = jnp.broadcast_to(loc, (dim,))
 
     def transform_and_log_det(self, x, condition=None):
-        y = self.triangular @ x + self.loc
-        return y, jnp.log(jnp.abs(jnp.diag(self.triangular))).sum()
+        y = self.triangular.value @ x + self.loc
+        return y, jnp.log(jnp.abs(jnp.diag(self.triangular.value))).sum()
 
     def inverse_and_log_det(self, y, condition=None):
-        x = solve_triangular(self.triangular, y - self.loc, lower=self.lower)
-        return x, -jnp.log(jnp.abs(jnp.diag(self.triangular))).sum()
+        x = solve_triangular(self.triangular.value, y - self.loc, lower=self.lower)
+        return x, -jnp.log(jnp.abs(jnp.diag(self.triangular.value))).sum()
 
 
 class AdditiveCondition(AbstractBijection):

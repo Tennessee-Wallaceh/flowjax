@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from functools import partial
+from typing import Protocol, runtime_checkable
 
 import equinox as eqx
 import jax
@@ -13,6 +14,7 @@ from jaxtyping import Array, Int, PRNGKeyArray
 from flowjax.bijections.bijection import AbstractBijection
 from flowjax.bijections.jax_transforms import Vmap
 from flowjax.masks import rank_based_mask
+from flowjax.parameters import MaskedWeightParameter
 from flowjax.utils import get_ravelled_pytree_constructor
 
 
@@ -40,7 +42,7 @@ class MaskedAutoregressive(AbstractBijection):
     shape: tuple[int, ...]
     cond_shape: tuple[int, ...] | None
     transformer_constructor: Callable
-    masked_autoregressive_mlp: eqx.nn.MLP
+    masked_autoregressive_mlp: "MaskedMLP"
 
     def __init__(
         self,
@@ -126,11 +128,11 @@ def masked_autoregressive_mlp(
     hidden_ranks: Int[Array, " hidden_size"],
     out_ranks: Int[Array, " out_size"],
     **kwargs,
-) -> eqx.nn.MLP:
+) -> "MaskedMLP":
     """Returns an equinox multilayer perceptron, with autoregressive masks.
 
-    The weight matrices are wrapped using :class:`~paramax.wrappers.Parameterize`, which
-    will apply the masking when :class:`~paramax.wrappers.unwrap` is called on the MLP.
+    The weight matrices are wrapped with explicit masked parameter objects, which are
+    materialized by :func:`flowjax.parameters.parameterize` before use.
     For details of how the masks are formed, see https://arxiv.org/pdf/1502.03509.pdf.
 
     Args:
@@ -150,14 +152,67 @@ def masked_autoregressive_mlp(
     )
     ranks = [in_ranks, *[hidden_ranks] * mlp.depth, out_ranks]
 
-    masked_layers = []
+    masked_layers: list[MaskedLinear] = []
     for i, linear in enumerate(mlp.layers):
         mask = rank_based_mask(ranks[i], ranks[i + 1], eq=i != len(mlp.layers) - 1)
-        masked_linear = eqx.tree_at(
-            lambda linear: linear.weight,
-            linear,
-            paramax.Parameterize(jnp.where, mask, linear.weight, 0),
+        masked_layers.append(
+            MaskedLinear(
+                weight=MaskedWeightParameter(linear.weight, mask),
+                bias=linear.bias,
+            ),
         )
-        masked_layers.append(masked_linear)
+    return MaskedMLP(
+        layers=tuple(masked_layers),
+        activation=mlp.activation,
+        final_activation=mlp.final_activation,
+        use_final_bias=mlp.use_final_bias,
+    )
 
-    return eqx.tree_at(lambda mlp: mlp.layers, mlp, replace=tuple(masked_layers))
+
+@runtime_checkable
+class SupportsMaskedWeight(Protocol):
+    @property
+    def value(self) -> Array: ...
+
+
+class MaskedLinear(eqx.Module):
+    weight: SupportsMaskedWeight
+    bias: Array | None
+
+    def __call__(self, x: Array) -> Array:
+        if x.ndim != 1:
+            raise ValueError(f"Expected x.ndim == 1; got {x.ndim}.")
+        weight = self.weight.value
+        if weight.ndim != 2:
+            raise ValueError(f"Expected weight.ndim == 2; got {weight.ndim}.")
+        if weight.shape[1] != x.shape[0]:
+            raise ValueError(
+                "Input dimension mismatch in MaskedLinear: "
+                f"expected x.shape[0] == {weight.shape[1]}, got {x.shape[0]}.",
+            )
+        y = weight @ x
+        if self.bias is not None:
+            if self.bias.shape != (weight.shape[0],):
+                raise ValueError(
+                    "Bias shape mismatch in MaskedLinear: "
+                    f"expected {(weight.shape[0],)}, got {self.bias.shape}.",
+                )
+            y = y + self.bias
+        return y
+
+
+class MaskedMLP(eqx.Module):
+    layers: tuple[MaskedLinear, ...]
+    activation: Callable
+    final_activation: Callable
+    use_final_bias: bool
+
+    def __call__(self, x: Array) -> Array:
+        if len(self.layers) < 2:
+            raise ValueError("MaskedMLP expected at least two layers.")
+        for layer in self.layers[:-1]:
+            x = self.activation(layer(x))
+        x = self.layers[-1](x)
+        if self.final_activation is not None:
+            x = self.final_activation(x)
+        return x
