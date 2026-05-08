@@ -1,12 +1,10 @@
 """Rational quadratic spline bijections (https://arxiv.org/abs/1906.04032)."""
 
-import jax
 import jax.numpy as jnp
 from jaxtyping import Array
-from paramax import Parameterize, RealToIncreasingOnInterval
-from paramax.utils import inv_softplus
 
 from flowjax.bijections.bijection import AbstractBijection
+from flowjax.parameters import IncreasingIntervalParameter, PositiveParameter
 
 
 class RationalQuadraticSpline(AbstractBijection):
@@ -25,9 +23,9 @@ class RationalQuadraticSpline(AbstractBijection):
 
     knots: int
     interval: tuple[int | float, int | float]
-    x_pos: Array
-    y_pos: Array
-    derivatives: Array
+    x_pos: IncreasingIntervalParameter
+    y_pos: IncreasingIntervalParameter
+    derivatives: PositiveParameter
     shape = ()
     cond_shape = None
 
@@ -42,26 +40,28 @@ class RationalQuadraticSpline(AbstractBijection):
         self.knots = knots
         interval = interval if isinstance(interval, tuple) else (-interval, interval)
         self.interval = interval
-        self.x_pos = RealToIncreasingOnInterval(
-            jnp.zeros(knots + 1),
+        self.x_pos = IncreasingIntervalParameter(
+            jnp.zeros(knots),
             interval=interval,
             min_width=min_width,
-            include_endpoints="both",
-        )  # type: ignore
-        self.y_pos = RealToIncreasingOnInterval(
-            jnp.zeros(knots + 1),
+        )
+        self.y_pos = IncreasingIntervalParameter(
+            jnp.zeros(knots),
             interval=interval,
             min_width=min_width,
-            include_endpoints="both",
-        )  # type: ignore
-        self.derivatives = Parameterize(
-            lambda arr: jax.nn.softplus(arr) + min_derivative,
-            jnp.full(knots + 2, inv_softplus(1 - min_derivative)),
-        )  # type: ignore
+        )
+        self.derivatives = PositiveParameter(
+            jnp.ones(knots + 2),
+            min_value=min_derivative,
+        )
 
     def transform_and_log_det(self, x, condition=None):
         # Following notation from the paper
-        x_pos, y_pos, derivatives = self.x_pos, self.y_pos, self.derivatives
+        x_pos, y_pos, derivatives = (
+            self.x_pos.value,
+            self.y_pos.value,
+            self.derivatives.value,
+        )
         in_bounds = jnp.logical_and(
             x >= jnp.array(self.interval[0]),
             x <= jnp.array(self.interval[1]),
@@ -89,7 +89,11 @@ class RationalQuadraticSpline(AbstractBijection):
 
     def inverse_and_log_det(self, y, condition=None):
         # Following notation from the paper
-        x_pos, y_pos, derivatives = self.x_pos, self.y_pos, self.derivatives
+        x_pos, y_pos, derivatives = (
+            self.x_pos.value,
+            self.y_pos.value,
+            self.derivatives.value,
+        )
         in_bounds = jnp.logical_and(
             y >= jnp.array(self.interval[0]),
             y <= jnp.array(self.interval[1]),

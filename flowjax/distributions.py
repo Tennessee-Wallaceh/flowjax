@@ -12,14 +12,12 @@ import jax.numpy as jnp
 import jax.random as jr
 from equinox import AbstractVar
 from jax import dtypes
-from jax.nn import log_softmax, softplus
 from jax.numpy import linalg
 from jax.scipy import stats as jstats
 from jax.scipy.special import logsumexp
 from jax.tree_util import tree_map
 from jaxtyping import Array, ArrayLike, PRNGKeyArray, Shaped
-from paramax import AbstractUnwrappable, Parameterize, non_trainable, unwrap
-from paramax.utils import inv_softplus
+from paramax import non_trainable
 
 from flowjax.bijections import (
     AbstractBijection,
@@ -29,6 +27,7 @@ from flowjax.bijections import (
     Scale,
     TriangularAffine,
 )
+from flowjax.parameters import LogSimplexParameter, PositiveParameter, parameterize
 from flowjax.utils import (
     _get_ufunc_signature,
     arraylike_to_array,
@@ -100,7 +99,7 @@ class AbstractDistribution(eqx.Module):
         Returns:
             Array: Jax array of log probabilities.
         """
-        self = unwrap(self)
+        self = parameterize(self)
         x = arraylike_to_array(x, err_name="x", dtype=float)
         if self.cond_shape is not None:
             condition = arraylike_to_array(condition, err_name="condition", dtype=float)
@@ -124,7 +123,7 @@ class AbstractDistribution(eqx.Module):
             condition: Conditioning variables. Defaults to None.
             sample_shape: Sample shape. Defaults to ().
         """
-        self = unwrap(self)
+        self = parameterize(self)
         if self.cond_shape is not None:
             condition = arraylike_to_array(condition, err_name="condition")
         keys = self._get_sample_keys(key, sample_shape, condition)
@@ -148,7 +147,7 @@ class AbstractDistribution(eqx.Module):
             condition: Conditioning variables. Defaults to None.
             sample_shape: Sample shape. Defaults to ().
         """
-        self = unwrap(self)
+        self = parameterize(self)
         if self.cond_shape is not None:
             condition = arraylike_to_array(condition, err_name="condition")
         keys = self._get_sample_keys(key, sample_shape, condition)
@@ -362,7 +361,7 @@ class AbstractLocScaleDistribution(AbstractTransformed):
     @property
     def scale(self):
         """Scale of the distribution."""
-        return unwrap(self.bijection.scale)
+        return self.bijection.scale.value
 
 
 class StandardNormal(AbstractDistribution):
@@ -453,7 +452,7 @@ class MultivariateNormal(AbstractTransformed):
     @property
     def covariance(self):
         """The covariance matrix."""
-        cholesky = unwrap(self.bijection.triangular)
+        cholesky = self.bijection.triangular.value
         return cholesky @ cholesky.T
 
 
@@ -494,13 +493,12 @@ class Uniform(AbstractLocScaleDistribution):
     @property
     def minval(self):
         """Minimum value of the uniform distribution."""
-        return unwrap(self.bijection.loc)
+        return parameterize(self.bijection.loc)
 
     @property
     def maxval(self):
         """Maximum value of the uniform distribution."""
-        unwrapped = unwrap(self)
-        return unwrapped.loc + unwrapped.scale
+        return parameterize(self.bijection.loc) + self.bijection.scale.value
 
 
 class _StandardGumbel(AbstractDistribution):
@@ -574,19 +572,19 @@ class _StandardStudentT(AbstractDistribution):
 
     shape: tuple[int, ...]
     cond_shape: ClassVar[None] = None
-    df: Array | AbstractUnwrappable[Array]
+    df: PositiveParameter
 
     def __init__(self, df: ArrayLike):
         df = arraylike_to_array(df, dtype=float)
         df = eqx.error_if(df, df <= 0, "Degrees of freedom values must be positive.")
         self.shape = jnp.shape(df)
-        self.df = Parameterize(softplus, inv_softplus(df))
+        self.df = PositiveParameter(df)
 
     def _log_prob(self, x, condition=None):
-        return jstats.t.logpdf(x, df=self.df).sum()
+        return jstats.t.logpdf(x, df=self.df.value).sum()
 
     def _sample(self, key, condition=None):
-        return jr.t(key, df=self.df, shape=self.shape)
+        return jr.t(key, df=self.df.value, shape=self.shape)
 
 
 class StudentT(AbstractLocScaleDistribution):
@@ -611,7 +609,7 @@ class StudentT(AbstractLocScaleDistribution):
     @property
     def df(self):
         """The degrees of freedom of the distribution."""
-        return unwrap(self.base_dist.df)
+        return parameterize(self.base_dist.df)
 
 
 class _StandardLaplace(AbstractDistribution):
@@ -673,7 +671,7 @@ class Exponential(AbstractTransformed):
 
     @property
     def rate(self):
-        return 1 / unwrap(self.bijection.scale)
+        return 1 / self.bijection.scale.value
 
 
 class _StandardLogistic(AbstractDistribution):
@@ -734,7 +732,7 @@ class VmapMixture(AbstractDistribution):
 
     shape: tuple[int, ...]
     cond_shape: tuple[int, ...] | None
-    log_normalized_weights: Array | AbstractUnwrappable[Array]
+    log_normalized_weights: LogSimplexParameter
     dist: AbstractDistribution
 
     def __init__(
@@ -744,17 +742,17 @@ class VmapMixture(AbstractDistribution):
     ):
         weights = eqx.error_if(weights, weights <= 0, "Weights must be positive.")
         self.dist = dist
-        self.log_normalized_weights = Parameterize(log_softmax, jnp.log(weights))
+        self.log_normalized_weights = LogSimplexParameter(weights)
         self.shape = dist.shape
         self.cond_shape = dist.cond_shape
 
     def _log_prob(self, x, condition=None):
         log_probs = eqx.filter_vmap(lambda d: d._log_prob(x, condition))(self.dist)
-        return logsumexp(log_probs + self.log_normalized_weights)
+        return logsumexp(log_probs + self.log_normalized_weights.value)
 
     def _sample(self, key, condition=None):
         key1, key2 = jr.split(key)
-        component = jr.categorical(key1, self.log_normalized_weights)
+        component = jr.categorical(key1, self.log_normalized_weights.value)
         component_dist = tree_map(
             lambda leaf: leaf[component] if isinstance(leaf, Array) else leaf,
             tree=self.dist,
@@ -763,19 +761,21 @@ class VmapMixture(AbstractDistribution):
 
 
 class _StandardGamma(AbstractDistribution):
-    concentration: Array | AbstractUnwrappable[Array]
+    concentration: PositiveParameter
     shape: tuple[int, ...]
     cond_shape: ClassVar[None] = None
 
     def __init__(self, concentration: ArrayLike):
-        self.concentration = Parameterize(softplus, inv_softplus(concentration))
+        self.concentration = PositiveParameter(
+            arraylike_to_array(concentration, dtype=float)
+        )
         self.shape = jnp.shape(concentration)
 
     def _sample(self, key, condition=None):
-        return jr.gamma(key, self.concentration)
+        return jr.gamma(key, self.concentration.value)
 
     def _log_prob(self, x, condition=None):
-        return jstats.gamma.logpdf(x, self.concentration).sum()
+        return jstats.gamma.logpdf(x, self.concentration.value).sum()
 
 
 class Gamma(AbstractTransformed):
@@ -803,8 +803,8 @@ class Beta(AbstractDistribution):
         beta: The beta shape parameter.
     """
 
-    alpha: Array | AbstractUnwrappable[Array]
-    beta: Array | AbstractUnwrappable[Array]
+    alpha: PositiveParameter
+    beta: PositiveParameter
     shape: tuple[int, ...]
     cond_shape: ClassVar[None] = None
 
@@ -813,12 +813,12 @@ class Beta(AbstractDistribution):
             arraylike_to_array(alpha, dtype=float),
             arraylike_to_array(beta, dtype=float),
         )
-        self.alpha = Parameterize(softplus, inv_softplus(alpha))
-        self.beta = Parameterize(softplus, inv_softplus(beta))
+        self.alpha = PositiveParameter(alpha)
+        self.beta = PositiveParameter(beta)
         self.shape = alpha.shape
 
     def _sample(self, key, condition=None):
-        return jr.beta(key, self.alpha, self.beta)
+        return jr.beta(key, self.alpha.value, self.beta.value)
 
     def _log_prob(self, x, condition=None):
-        return jstats.beta.logpdf(x, self.alpha, self.beta).sum()
+        return jstats.beta.logpdf(x, self.alpha.value, self.beta.value).sum()
