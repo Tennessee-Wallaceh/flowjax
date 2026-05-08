@@ -4,9 +4,9 @@ import jax.numpy as jnp
 from jax import Array
 from jax.scipy import fft
 from jaxtyping import ArrayLike
-from paramax import AbstractUnwrappable, Parameterize
 
 from flowjax.bijections.bijection import AbstractBijection
+from flowjax.parameters import UnitVectorParameter
 from flowjax.utils import arraylike_to_array
 
 
@@ -41,7 +41,7 @@ class Householder(AbstractBijection):
     """
 
     shape: tuple[int, ...]
-    unit_vec: Array | AbstractUnwrappable
+    unit_vec: UnitVectorParameter
     cond_shape = None
 
     def __init__(self, params: ArrayLike):
@@ -49,10 +49,10 @@ class Householder(AbstractBijection):
         if params.ndim != 1:
             raise ValueError("params must be a vector.")
         self.shape = params.shape
-        self.unit_vec = Parameterize(lambda x: x / jnp.linalg.norm(x), params)
+        self.unit_vec = UnitVectorParameter(params)
 
     def _householder(self, x: Array) -> Array:
-        return x - 2 * self.unit_vec * (x @ self.unit_vec)
+        return x - 2 * self.unit_vec.value * (x @ self.unit_vec.value)
 
     def transform_and_log_det(self, x: jnp.ndarray, condition: Array | None = None):
         return self._householder(x), jnp.zeros(())
