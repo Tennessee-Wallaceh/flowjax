@@ -1,7 +1,6 @@
 import equinox as eqx
 import jax.numpy as jnp
 import jax.random as jr
-import paramax
 import pytest
 from jax.tree_util import tree_map
 
@@ -12,23 +11,23 @@ def test_vmap_uneven_init():
     "Tests adding a batch dimension to a particular leaf (parameter array)."
     bijection = Affine(jnp.zeros(()), jnp.ones(()))
     bijection = eqx.tree_at(lambda bij: bij.loc, bijection, jnp.arange(3))
-    in_axes = tree_map(lambda _: None, paramax.unwrap(bijection))
+    in_axes = tree_map(lambda _: None, bijection)
     in_axes = eqx.tree_at(lambda bij: bij.loc, in_axes, 0, is_leaf=lambda x: x is None)
     bijection = Vmap(bijection, in_axes=in_axes)
 
     assert bijection.shape == (3,)
     assert bijection.bijection.loc.shape == (3,)
-    assert paramax.unwrap(bijection.bijection.scale).shape == ()
+    assert bijection.bijection.scale.value.shape == ()
 
     x = jnp.ones(3)
     expected = x + jnp.arange(3)
     assert bijection.transform(x) == pytest.approx(expected)
 
 
-def test_vmap_error_with_unwrappable():
+def test_vmap_error_with_non_array_leaf_axis():
     bijection = Affine(jnp.zeros(1), jnp.ones(1))
     in_axes = tree_map(eqx.is_array, bijection)
-    with pytest.raises(ValueError, match="unwrappable"):
+    with pytest.raises(ValueError, match="non-array leaf"):
         bijection = Vmap(bijection, in_axes=in_axes)
 
 

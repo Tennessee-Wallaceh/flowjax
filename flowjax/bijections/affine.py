@@ -12,6 +12,9 @@ from flowjax.parameters import PositiveParameter, TriangularParameter
 from flowjax.utils import arraylike_to_array
 
 
+
+
+
 class Affine(AbstractBijection):
     r"""Elementwise affine transformation :math:`y = a \cdot x + b`.
 
@@ -42,12 +45,12 @@ class Affine(AbstractBijection):
         self.scale = PositiveParameter(scale)
 
     def transform_and_log_det(self, x, condition=None):
-        return x * self.scale.value + self.loc, jnp.log(jnp.abs(self.scale.value)).sum()
+        scale = self.scale.value
+        return x * scale + self.loc, jnp.log(jnp.abs(scale)).sum()
 
     def inverse_and_log_det(self, y, condition=None):
-        return (y - self.loc) / self.scale.value, -jnp.log(
-            jnp.abs(self.scale.value)
-        ).sum()
+        scale = self.scale.value
+        return (y - self.loc) / scale, -jnp.log(jnp.abs(scale)).sum()
 
 
 class Loc(AbstractBijection):
@@ -92,10 +95,12 @@ class Scale(AbstractBijection):
         self.shape = jnp.shape(scale)
 
     def transform_and_log_det(self, x, condition=None):
-        return x * self.scale.value, jnp.log(jnp.abs(self.scale.value)).sum()
+        scale = self.scale.value
+        return x * scale, jnp.log(jnp.abs(scale)).sum()
 
     def inverse_and_log_det(self, y, condition=None):
-        return y / self.scale.value, -jnp.log(jnp.abs(self.scale.value)).sum()
+        scale = self.scale.value
+        return y / scale, -jnp.log(jnp.abs(scale)).sum()
 
 
 class TriangularAffine(AbstractBijection):
@@ -138,12 +143,14 @@ class TriangularAffine(AbstractBijection):
         self.loc = jnp.broadcast_to(loc, (dim,))
 
     def transform_and_log_det(self, x, condition=None):
-        y = self.triangular.value @ x + self.loc
-        return y, jnp.log(jnp.abs(jnp.diag(self.triangular.value))).sum()
+        triangular = self.triangular.value
+        y = triangular @ x + self.loc
+        return y, jnp.log(jnp.abs(jnp.diag(triangular))).sum()
 
     def inverse_and_log_det(self, y, condition=None):
-        x = solve_triangular(self.triangular.value, y - self.loc, lower=self.lower)
-        return x, -jnp.log(jnp.abs(jnp.diag(self.triangular.value))).sum()
+        triangular = self.triangular.value
+        x = solve_triangular(triangular, y - self.loc, lower=self.lower)
+        return x, -jnp.log(jnp.abs(jnp.diag(triangular))).sum()
 
 
 class AdditiveCondition(AbstractBijection):

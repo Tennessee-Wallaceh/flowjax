@@ -6,7 +6,6 @@ import equinox as eqx
 import jax.numpy as jnp
 import jax.random as jr
 import optax
-import paramax
 from jaxtyping import ArrayLike, PRNGKeyArray, PyTree, Scalar
 from tqdm import tqdm
 
@@ -52,8 +51,7 @@ def fit_to_key_based_loss(
 
     params, static = eqx.partition(
         tree,
-        eqx.is_inexact_array,
-        is_leaf=lambda leaf: isinstance(leaf, paramax.NonTrainable),
+        eqx.is_inexact_array
     )
     opt_state = optimizer.init(params)
 
@@ -133,8 +131,7 @@ def fit_to_data(
 
     params, static = eqx.partition(
         dist,
-        eqx.is_inexact_array,
-        is_leaf=lambda leaf: isinstance(leaf, paramax.NonTrainable),
+        eqx.is_inexact_array
     )
     best_params = params
     opt_state = optimizer.init(params)

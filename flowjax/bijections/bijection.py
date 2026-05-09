@@ -15,7 +15,6 @@ import jax.numpy as jnp
 from equinox import AbstractVar
 from jaxtyping import Array, ArrayLike
 
-from flowjax.parameters import parameterize
 from flowjax.utils import _get_ufunc_signature, arraylike_to_array
 
 
@@ -53,7 +52,7 @@ def _unwrap_check_and_cast(method):
                 )
             return x
 
-        return method(parameterize(bijection), _check_x(x), _check_condition(condition))
+        return method(bijection, _check_x(x), _check_condition(condition))
 
     return wrapper
 

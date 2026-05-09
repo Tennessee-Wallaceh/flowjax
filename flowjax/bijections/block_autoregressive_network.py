@@ -11,11 +11,11 @@ import jax.random as jr
 from jax import random
 from jax.nn import softplus
 from jaxtyping import PRNGKeyArray
-from paramax import Parameterize, WeightNormalization
 
 from flowjax import masks
 from flowjax.bijections.bijection import AbstractBijection
 from flowjax.bijections.tanh import _tanh_log_grad
+from flowjax.parameters import MaskedWeightParameter
 
 
 class _CallableToBijection(AbstractBijection):
@@ -52,6 +52,31 @@ class _LeakyTanh(AbstractBijection):
 
     def inverse_and_log_det(self, y, condition=None):
         raise NotImplementedError()
+
+
+class _TypedLinear(eqx.Module):
+    """Linear layer with explicit typed constrained weight parameter."""
+
+    weight_param: MaskedWeightParameter
+    bias: jnp.ndarray | None
+    in_features: int
+    out_features: int
+
+    def __init__(self, *, weight_param: MaskedWeightParameter, bias, in_features: int, out_features: int):
+        self.weight_param = weight_param
+        self.bias = bias
+        self.in_features = in_features
+        self.out_features = out_features
+
+    @property
+    def weight(self):
+        return self.weight_param.value
+
+    def __call__(self, x):
+        y = self.weight @ x
+        if self.bias is not None:
+            y = y + self.bias
+        return y
 
 
 class BlockAutoregressiveNetwork(AbstractBijection):
@@ -184,12 +209,13 @@ class BlockAutoregressiveNetwork(AbstractBijection):
         return x, log_det_3d
 
 
+
 def block_autoregressive_linear(
     key: PRNGKeyArray,
     *,
     n_blocks: int,
     block_shape: tuple,
-) -> tuple[eqx.nn.Linear, Callable]:
+) -> tuple[_TypedLinear, Callable]:
     """Block autoregressive linear layer (https://arxiv.org/abs/1904.04676).
 
     Returns:
@@ -211,10 +237,15 @@ def block_autoregressive_linear(
         weight = jnp.where(block_tril_mask, weight, 0)
         return jnp.where(block_diag_mask, softplus(weight), weight)
 
-    weight = WeightNormalization(Parameterize(apply_mask, linear.weight))
-    linear = eqx.tree_at(lambda linear: linear.weight, linear, replace=weight)
+    masked_weight = MaskedWeightParameter(apply_mask(linear.weight), block_tril_mask)
+    linear = _TypedLinear(
+        weight_param=masked_weight,
+        bias=linear.bias,
+        in_features=in_features,
+        out_features=out_features,
+    )
 
-    def linear_to_log_block_diagonal(linear: eqx.nn.Linear):
+    def linear_to_log_block_diagonal(linear: _TypedLinear):
         idxs = jnp.where(block_diag_mask, size=prod(block_shape) * n_blocks)
         jac_3d = linear.weight[idxs].reshape(n_blocks, *block_shape)
         return jnp.log(jac_3d)

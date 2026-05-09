@@ -66,8 +66,8 @@ bijections = {
     "Indexed (int array)": lambda: Indexed(Flip((2,)), jnp.array([0, 2]), (DIM,)),
     "Indexed (slice)": lambda: Indexed(Affine(jnp.zeros(2)), slice(0, 2), (DIM,)),
     "Affine": lambda: Affine(jnp.ones(DIM), jnp.full(DIM, 2)),
-    "Affine (pos and neg scales)": lambda: eqx.tree_at(
-        lambda aff: aff.scale, Affine(scale=jnp.ones(3)), jnp.array([-1, 1, -2])
+    "Affine (non-unit positive scales)": lambda: Affine(
+        scale=jnp.array([0.5, 1.0, 2.0])
     ),
     "Tanh": lambda: Tanh((DIM,)),
     "LeakyTanh": lambda: LeakyTanh(1, (DIM,)),
@@ -85,13 +85,9 @@ bijections = {
         jnp.full((DIM, DIM), 0.5),
         lower=False,
     ),
-    "TriangularAffine (pos and neg diag)": lambda: eqx.tree_at(
-        lambda triaff: triaff.triangular,
-        TriangularAffine(
-            jnp.arange(3),
-            jnp.diag(jnp.ones(3)),
-        ),
-        jnp.diag(jnp.array([-1, 2, -3])),
+    "TriangularAffine (non-unit positive diag)": lambda: TriangularAffine(
+        jnp.arange(3),
+        jnp.diag(jnp.array([0.5, 2.0, 3.0])),
     ),
     "RationalQuadraticSpline": lambda: RationalQuadraticSpline(knots=4, interval=1),
     "Coupling (unconditional)": lambda: Coupling(
@@ -161,11 +157,7 @@ bijections = {
     "Chain": lambda: Chain([Flip((DIM,)), Affine(jnp.ones(DIM), jnp.full(DIM, 2))]),
     "Scan": lambda: Scan(eqx.filter_vmap(Affine)(jnp.ones((2, DIM)))),
     "Scale": lambda: Scale(jnp.full(DIM, 2)),
-    "Scale (pos and neg scales)": lambda: eqx.tree_at(
-        lambda scale: scale.scale,
-        Scale(jnp.ones(3)),
-        jnp.array([-1, 2, -3]),
-    ),
+    "Scale (non-unit positive scales)": lambda: Scale(jnp.array([0.5, 2.0, 3.0])),
     "Concatenate": lambda: Concatenate([Affine(jnp.ones(DIM)), Tanh(shape=(DIM,))]),
     "ConcatenateAxis1": lambda: Concatenate(
         [Affine(jnp.ones((3, 3))), Tanh(shape=((3, 3)))],

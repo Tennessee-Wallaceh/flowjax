@@ -17,7 +17,7 @@ from jax.scipy import stats as jstats
 from jax.scipy.special import logsumexp
 from jax.tree_util import tree_map
 from jaxtyping import Array, ArrayLike, PRNGKeyArray, Shaped
-from paramax import non_trainable
+from flowjax.parameters import non_trainable
 
 from flowjax.bijections import (
     AbstractBijection,
@@ -27,7 +27,7 @@ from flowjax.bijections import (
     Scale,
     TriangularAffine,
 )
-from flowjax.parameters import LogSimplexParameter, PositiveParameter, parameterize
+from flowjax.parameters import LogSimplexParameter, PositiveParameter
 from flowjax.utils import (
     _get_ufunc_signature,
     arraylike_to_array,
@@ -99,7 +99,6 @@ class AbstractDistribution(eqx.Module):
         Returns:
             Array: Jax array of log probabilities.
         """
-        self = parameterize(self)
         x = arraylike_to_array(x, err_name="x", dtype=float)
         if self.cond_shape is not None:
             condition = arraylike_to_array(condition, err_name="condition", dtype=float)
@@ -123,7 +122,6 @@ class AbstractDistribution(eqx.Module):
             condition: Conditioning variables. Defaults to None.
             sample_shape: Sample shape. Defaults to ().
         """
-        self = parameterize(self)
         if self.cond_shape is not None:
             condition = arraylike_to_array(condition, err_name="condition")
         keys = self._get_sample_keys(key, sample_shape, condition)
@@ -147,7 +145,6 @@ class AbstractDistribution(eqx.Module):
             condition: Conditioning variables. Defaults to None.
             sample_shape: Sample shape. Defaults to ().
         """
-        self = parameterize(self)
         if self.cond_shape is not None:
             condition = arraylike_to_array(condition, err_name="condition")
         keys = self._get_sample_keys(key, sample_shape, condition)
@@ -493,12 +490,12 @@ class Uniform(AbstractLocScaleDistribution):
     @property
     def minval(self):
         """Minimum value of the uniform distribution."""
-        return parameterize(self.bijection.loc)
+        return self.bijection.loc
 
     @property
     def maxval(self):
         """Maximum value of the uniform distribution."""
-        return parameterize(self.bijection.loc) + self.bijection.scale.value
+        return self.bijection.loc + self.bijection.scale.value
 
 
 class _StandardGumbel(AbstractDistribution):
@@ -609,7 +606,7 @@ class StudentT(AbstractLocScaleDistribution):
     @property
     def df(self):
         """The degrees of freedom of the distribution."""
-        return parameterize(self.base_dist.df)
+        return self.base_dist.df
 
 
 class _StandardLaplace(AbstractDistribution):

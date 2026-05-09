@@ -8,7 +8,6 @@ from typing import Any
 
 import equinox as eqx
 import jax
-import paramax
 from jaxtyping import Array, ArrayLike
 
 from flowjax.bijections import AbstractBijection
@@ -133,8 +132,7 @@ def register_params(
     """
     params, static = eqx.partition(
         model,
-        eqx.is_inexact_array,
-        is_leaf=lambda leaf: isinstance(leaf, paramax.NonTrainable),
+        eqx.is_inexact_array
     )
     if callable(params):
         # Wrap to avoid special handling of callables by numpyro. Numpyro expects a
@@ -143,7 +141,7 @@ def register_params(
         params = numpyro.param(name, lambda _: params)
     else:
         params = numpyro.param(name, params)
-    return paramax.unwrap(eqx.combine(params, static))
+    return eqx.combine(params, static)
 
 
 def distribution_to_numpyro(

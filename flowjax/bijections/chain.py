@@ -4,7 +4,6 @@ from collections.abc import Sequence
 
 import jax.numpy as jnp
 from jax import Array
-from paramax import AbstractUnwrappable, unwrap
 
 from flowjax.bijections.bijection import AbstractBijection
 from flowjax.utils import check_shapes_match, merge_cond_shapes
@@ -24,18 +23,15 @@ class Chain(AbstractBijection):
 
     shape: tuple[int, ...]
     cond_shape: tuple[int, ...] | None
-    bijections: tuple[AbstractBijection | AbstractUnwrappable[AbstractBijection], ...]
+    bijections: tuple[AbstractBijection, ...]
 
     def __init__(
         self,
-        bijections: Sequence[
-            AbstractBijection | AbstractUnwrappable[AbstractBijection]
-        ],
+        bijections: Sequence[AbstractBijection],
     ):
-        unwrapped = unwrap(bijections)
-        check_shapes_match([b.shape for b in unwrapped])
-        self.shape = unwrapped[0].shape
-        self.cond_shape = merge_cond_shapes([unwrap(b).cond_shape for b in unwrapped])
+        check_shapes_match([b.shape for b in bijections])
+        self.shape = bijections[0].shape
+        self.cond_shape = merge_cond_shapes([b.cond_shape for b in bijections])
         self.bijections = tuple(bijections)
 
     def transform_and_log_det(
