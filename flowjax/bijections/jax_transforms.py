@@ -7,7 +7,6 @@ import jax.numpy as jnp
 from jax.lax import scan
 from jax.tree_util import tree_leaves, tree_map
 from jaxtyping import PyTree
-from paramax import contains_unwrappables, unwrap
 
 from flowjax.bijections.bijection import AbstractBijection
 
@@ -74,16 +73,6 @@ def _filter_scan(f, init, xs, *, reverse=False):
 
     return scan(_scan_fn, init, params, reverse=reverse)
 
-
-def _check_no_unwrappables(pytree):
-    if contains_unwrappables(pytree):
-        raise ValueError(
-            "In axes containing unwrappables is not supported. In axes must be "
-            "specified to match the structure of the unwrapped pytree i.e after "
-            "calling pararamax.unwrap."
-        )
-
-
 class Vmap(AbstractBijection):
     """Applies vmap to bijection methods to add a batch dimension to the bijection.
 
@@ -127,10 +116,9 @@ class Vmap(AbstractBijection):
         parameter? We could achieve this as follows.
 
             >>> from jax.tree_util import tree_map
-            >>> import paramax
             >>> bijection = Affine(jnp.zeros(()), jnp.ones(()))
             >>> bijection = eqx.tree_at(lambda bij: bij.loc, bijection, jnp.arange(3))
-            >>> in_axes = tree_map(lambda _: None, paramax.unwrap(bijection))
+            >>> in_axes = tree_map(lambda _: None, bijection)
             >>> in_axes = eqx.tree_at(
             ...     lambda bij: bij.loc, in_axes, 0, is_leaf=lambda x: x is None
             ...     )
@@ -139,7 +127,7 @@ class Vmap(AbstractBijection):
             (3,)
             >>> bijection.bijection.loc.shape
             (3,)
-            >>> paramax.unwrap(bijection.bijection.scale).shape
+            >>> bijection.bijection.scale.value.shape
             ()
             >>> x = jnp.ones(3)
             >>> bijection.transform(x)
@@ -167,8 +155,7 @@ class Vmap(AbstractBijection):
         if axis_size is None:
             if in_axes is None:
                 raise ValueError("Either axis_size or in_axes must be provided.")
-            _check_no_unwrappables(in_axes)
-            axis_size = _infer_axis_size_from_params(unwrap(bijection), in_axes)
+            axis_size = _infer_axis_size_from_params(bijection, in_axes)
 
         self.in_axes = (in_axes, 0, in_axes_condition)
         self.bijection = bijection
@@ -206,15 +193,21 @@ class Vmap(AbstractBijection):
 def _infer_axis_size_from_params(tree: PyTree, in_axes) -> int:
     axes = _resolve_vmapped_axes(tree, in_axes)
     axis_sizes = tree_leaves(
-        tree_map(
-            lambda leaf, ax: leaf.shape[ax] if ax is not None else None,
-            tree,
-            axes,
-        ),
+        tree_map(_leaf_axis_size, tree, axes),
     )
     if len(axis_sizes) == 0:
         raise ValueError("in_axes did not map to any leaves to vectorize.")
     return axis_sizes[0]
+
+
+def _leaf_axis_size(leaf, ax):
+    if ax is None:
+        return None
+    if not isinstance(ax, int):
+        raise TypeError(f"Expected axis to be int or None; got {type(ax).__name__}.")
+    if not hasattr(leaf, "shape"):
+        raise ValueError("in_axes selected a non-array leaf; in strict mode, only array leaves may be vmapped.")
+    return leaf.shape[ax]
 
 
 def _resolve_vmapped_axes(pytree, in_axes):

@@ -7,12 +7,15 @@ from typing import Any, Protocol, TypeVar, runtime_checkable
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import paramax
 from jax.tree_util import tree_map
 from jaxtyping import Array
 
 TLatent = TypeVar("TLatent")
 TValue = TypeVar("TValue")
+
+
+def _is_tracer(x: Array) -> bool:
+    return isinstance(x, jax.core.Tracer)
 
 
 @runtime_checkable
@@ -31,35 +34,26 @@ class Parameterization(Protocol[TLatent, TValue]):
         """Return the deterministic value associated with ``latent``."""
 
 
-@runtime_checkable
-class SupportsUnwrap(Protocol[TValue]):
-    """Protocol for explicit unwrapping of constrained parameter leaves."""
-
-    def unwrap(self) -> TValue:
-        """Return the unwrapped value."""
-
-
 def parameterize(pytree: Any):
     """Materialize parameterizations across a pytree.
 
-    This unwraps any leaf implementing :class:`SupportsUnwrap`.
-
-    Leaves implementing :class:`Parameterization` are preserved so callers can
-    explicitly access ``leaf.value`` where required.
+    Leaves implementing :class:`Parameterization` are preserved.
     """
 
-    def _materialize(leaf):
-        if isinstance(leaf, Parameterization):
-            return leaf
-        if isinstance(leaf, SupportsUnwrap):
-            return paramax.unwrap(leaf)
-        return leaf
-
-    return tree_map(_materialize, pytree, is_leaf=_is_parameter_leaf)
+    return tree_map(lambda leaf: leaf, pytree, is_leaf=_is_parameter_leaf)
 
 
 def _is_parameter_leaf(leaf) -> bool:
-    return isinstance(leaf, Parameterization | SupportsUnwrap)
+    return isinstance(leaf, Parameterization)
+
+
+def non_trainable(pytree: Any):
+    """Apply stop-gradient to all inexact array leaves in a pytree."""
+
+    return tree_map(
+        lambda leaf: jax.lax.stop_gradient(leaf) if eqx.is_inexact_array(leaf) else leaf,
+        pytree,
+    )
 
 
 class PositiveParameter(eqx.Module):
@@ -70,7 +64,7 @@ class PositiveParameter(eqx.Module):
 
     def __init__(self, value: Array, *, min_value: float = 0.0):
         value = jnp.asarray(value, dtype=float)
-        if jnp.any(value <= min_value):
+        if (not _is_tracer(value)) and jnp.any(value <= min_value):
             raise ValueError(
                 "PositiveParameter expected all values to be greater than min_value "
                 f"({min_value}); got minimum value {jnp.min(value)}.",
@@ -81,8 +75,6 @@ class PositiveParameter(eqx.Module):
     @property
     def value(self) -> Array:
         latent = self.latent
-        if isinstance(latent, SupportsUnwrap):
-            latent = paramax.unwrap(latent)
         return jax.nn.softplus(latent) + self.min_value
 
 
@@ -97,7 +89,7 @@ class TriangularParameter(eqx.Module):
         if matrix.shape[-1] != matrix.shape[-2]:
             raise ValueError("TriangularParameter expected a square matrix.")
         diag = jnp.diagonal(matrix, axis1=-2, axis2=-1)
-        if jnp.any(diag <= 0):
+        if (not _is_tracer(diag)) and jnp.any(diag <= 0):
             raise ValueError(
                 "TriangularParameter expected strictly positive diagonal entries; "
                 f"got minimum diagonal value {jnp.min(diag)}.",
@@ -109,8 +101,6 @@ class TriangularParameter(eqx.Module):
     @property
     def value(self) -> Array:
         latent = self.latent
-        if isinstance(latent, SupportsUnwrap):
-            latent = paramax.unwrap(latent)
         triangular = jnp.tril(latent) if self.lower else jnp.triu(latent)
         diag = jnp.diagonal(triangular, axis1=-2, axis2=-1)
         positive_diag = jax.nn.softplus(diag)
@@ -131,15 +121,13 @@ class UnitVectorParameter(eqx.Module):
         value = jnp.asarray(value, dtype=float)
         if value.ndim != 1:
             raise ValueError("UnitVectorParameter expected a 1-dimensional vector.")
-        if jnp.all(value == 0):
+        if (not _is_tracer(value)) and jnp.all(value == 0):
             raise ValueError("UnitVectorParameter expected a non-zero vector.")
         self.latent = value
 
     @property
     def value(self) -> Array:
         latent = self.latent
-        if isinstance(latent, SupportsUnwrap):
-            latent = paramax.unwrap(latent)
         return latent / jnp.linalg.norm(latent)
 
 
@@ -186,8 +174,6 @@ class IncreasingIntervalParameter(eqx.Module):
     @property
     def value(self) -> Array:
         latent = self.latent
-        if isinstance(latent, SupportsUnwrap):
-            latent = paramax.unwrap(latent)
 
         lo, hi = self.interval
         num_bins = latent.shape[0]
@@ -207,15 +193,13 @@ class LogSimplexParameter(eqx.Module):
 
     def __init__(self, weights: Array):
         weights = jnp.asarray(weights, dtype=float)
-        if jnp.any(weights <= 0):
+        if (not _is_tracer(weights)) and jnp.any(weights <= 0):
             raise ValueError("LogSimplexParameter expected strictly positive weights.")
         self.latent = jnp.log(weights)
 
     @property
     def value(self) -> Array:
         latent = self.latent
-        if isinstance(latent, SupportsUnwrap):
-            latent = paramax.unwrap(latent)
         return jax.nn.log_softmax(latent)
 
 
@@ -245,8 +229,6 @@ class MaskedWeightParameter(eqx.Module):
     @property
     def value(self) -> Array:
         latent = self.latent
-        if isinstance(latent, SupportsUnwrap):
-            latent = paramax.unwrap(latent)
         return jnp.where(self.mask, latent, 0)
 
 def _inv_softplus(x: Array) -> Array:

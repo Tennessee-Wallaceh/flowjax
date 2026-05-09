@@ -79,8 +79,8 @@ sudo apt-get install pandoc  # Required for building documentation
 ## Related
 - We make use of the [Equinox](https://arxiv.org/abs/2111.00254) package, which
   facilitates defining models using a PyTorch-like syntax with Jax.
-- For applying parameterizations, we use
-  [paramax](https://github.com/danielward27/paramax).
+- Parameter constraints and trainable leaves are implemented directly in FlowJAX
+  via Equinox modules and helper utilities.
 
 ## Citation
 If you found this package useful in academic work, please consider citing it using the

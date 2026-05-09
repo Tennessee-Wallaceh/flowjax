@@ -14,8 +14,6 @@ from equinox.nn import Linear
 from jax.nn import softplus
 from jax.nn.initializers import glorot_uniform
 from jaxtyping import Array, PRNGKeyArray
-from paramax import Parameterize, WeightNormalization
-from paramax.utils import inv_softplus
 
 from flowjax.bijections import (
     AbstractBijection,
@@ -38,6 +36,7 @@ from flowjax.bijections import (
     Vmap,
 )
 from flowjax.distributions import AbstractDistribution, Transformed
+from flowjax.parameters import PositiveParameter
 from flowjax.root_finding import (
     bisect_check_expand_search,
     root_finder_to_inverter,
@@ -45,7 +44,7 @@ from flowjax.root_finding import (
 
 
 def _affine_with_min_scale(min_scale: float = 1e-2) -> Affine:
-    scale = Parameterize(lambda x: softplus(x) + min_scale, inv_softplus(1 - min_scale))
+    scale = PositiveParameter(jnp.array(1.0), min_value=min_scale)
     return eqx.tree_at(where=lambda aff: aff.scale, pytree=Affine(), replace=scale)
 
 
@@ -327,7 +326,9 @@ def triangular_spline_flow(
         lt_weights = weights.at[jnp.diag_indices(dim)].set(1)
         tri_aff = TriangularAffine(jnp.zeros(dim), lt_weights)
         tri_aff = eqx.tree_at(
-            lambda t: t.triangular, tri_aff, replace_fn=WeightNormalization
+            lambda t: t.triangular.latent,
+            tri_aff,
+            replace_fn=lambda w: w / jnp.linalg.norm(w, axis=-1, keepdims=True),
         )
         bijections = [
             Sandwich(get_splines(), LeakyTanh(tanh_max_val, (dim,))),
