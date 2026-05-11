@@ -1,7 +1,8 @@
 """Residual scalar bijections using paper-style sign-adaptive split units."""
 
-from typing import ClassVar, Protocol
+from typing import ClassVar, Protocol, runtime_checkable
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as jr
@@ -12,10 +13,12 @@ from flowjax.parameters import PositiveParameter
 from flowjax.root_finding import bisection_search
 
 
+@runtime_checkable
 class _Activation(Protocol):
     def __call__(self, x: Array) -> Array: ...
 
 
+@runtime_checkable
 class _MonotonicLayer(Protocol):
     weight_raw: Array
     bias: Array
@@ -282,3 +285,179 @@ class DeepMonotonicResidual(AbstractBijection):
         )
         _, log_det = self.transform_and_log_det(root)
         return root, -log_det
+
+
+class TriangularDeepMonotonicResidual(AbstractBijection):
+    """Multivariate triangular deep monotone residual flow ``T(x)=sigma*x+h(x)``."""
+
+    shape: tuple[int, ...]
+    cond_shape: ClassVar[None] = None
+
+    sigma: PositiveParameter
+    hidden_layers: tuple["_MaskedMonotoneLayer", ...]
+    head: "_MaskedMonotoneLayer"
+    intercept: Array
+    base_activation: _Activation
+    sigma_is_scalar: bool
+    inverse_lower: Array
+    inverse_upper: Array
+
+    def __init__(
+        self,
+        key: PRNGKeyArray,
+        *,
+        dim: int,
+        channels: int = 16,
+        num_hidden_layers: int = 2,
+        rho: float = 0.95,
+        w_scale_self: float = 0.1,
+        w_scale_past: float = 1e-3,
+        per_dim_sigma: bool = True,
+        inverse_bracket: tuple[float, float] = (-5.0, 5.0),
+    ):
+        if dim < 1:
+            raise ValueError(f"dim must be >= 1. Got {dim}.")
+        if channels < 1:
+            raise ValueError(f"channels must be >= 1. Got {channels}.")
+        if num_hidden_layers < 1:
+            raise ValueError(f"num_hidden_layers must be >= 1. Got {num_hidden_layers}.")
+        if not (0.0 < rho < 1.0):
+            raise ValueError(f"rho must be in (0, 1). Got {rho}.")
+        if inverse_bracket[0] >= inverse_bracket[1]:
+            raise ValueError(
+                f"inverse_bracket must satisfy lower < upper. Got {inverse_bracket}."
+            )
+        self.shape = (dim,)
+        self.base_activation = jax.nn.squareplus
+        self.sigma_is_scalar = not per_dim_sigma
+        sigma0 = jnp.asarray(rho) if self.sigma_is_scalar else jnp.full((dim,), rho)
+        self.sigma = PositiveParameter(sigma0, min_value=1e-6)
+        self.inverse_lower = jnp.asarray(inverse_bracket[0])
+        self.inverse_upper = jnp.asarray(inverse_bracket[1])
+
+        keys = jr.split(key, num_hidden_layers + 1)
+        self.hidden_layers = tuple(
+            _MaskedMonotoneLayer(
+                keys[i],
+                dim=dim,
+                in_channels=1 if i == 0 else channels,
+                out_channels=channels,
+                base_activation=self.base_activation,
+                w_past_scale=w_scale_past,
+                w_self_scale=w_scale_self,
+                out_scale_init=1.0,
+            )
+            for i in range(num_hidden_layers)
+        )
+        self.head = _MaskedMonotoneLayer(
+            keys[-1],
+            dim=dim,
+            in_channels=channels,
+            out_channels=1,
+            base_activation=self.base_activation,
+            w_past_scale=w_scale_past,
+            w_self_scale=w_scale_self,
+            out_scale_init=1e-3,
+        )
+        self._calibrate_identity_scales()
+        self.intercept = -self._h_and_diag_dh(jnp.zeros((dim,)))[0]
+
+    def _h_and_diag_dh(self, x: Array) -> tuple[Array, Array]:
+        z = x[:, None]
+        diag = jnp.ones_like(z)
+        for layer in self.hidden_layers:
+            z, diag = layer.forward_and_diag_grad(z, diag)
+        h, diag = self.head.forward_and_diag_grad(z, diag)
+        return h.squeeze(axis=-1), diag.squeeze(axis=-1)
+
+    def _calibrate_identity_scales(self):
+        _, diag_dh0 = self._h_and_diag_dh(jnp.zeros((self.shape[0],)))
+        target = 1.0 - self.sigma.value
+        ratio = target / jnp.clip(diag_dh0, min=1e-6)
+        new_value = jnp.clip(self.head.out_scale.value * ratio[:, None], min=1e-6)
+        self.head = eqx.tree_at(
+            lambda l: l.out_scale,
+            self.head,
+            PositiveParameter(new_value),
+        )
+
+    def transform_and_log_det(self, x, condition=None):
+        h, diag_dh = self._h_and_diag_dh(x)
+        h = h + self.intercept
+        sigma = self.sigma.value
+        y = sigma * x + h
+        diag = sigma + diag_dh
+        tiny = jnp.finfo(diag.dtype).tiny
+        return y, jnp.sum(jnp.log(jnp.clip(diag, min=tiny)))
+
+    def inverse_and_log_det(self, y, condition=None):
+        x = jnp.zeros_like(y)
+        for i in range(self.shape[0]):
+            def scalar_eq(xi):
+                x_trial = x.at[i].set(xi)
+                return self.transform(x_trial)[i] - y[i]
+
+            xi, _ = bisection_search(
+                scalar_eq,
+                lower=self.inverse_lower,
+                upper=self.inverse_upper,
+            )
+            x = x.at[i].set(xi)
+        _, logdet = self.transform_and_log_det(x)
+        return x, -logdet
+
+
+@runtime_checkable
+class _MaskedLayerProtocol(Protocol):
+    def forward_and_diag_grad(self, z: Array, diag_in: Array) -> tuple[Array, Array]: ...
+
+
+class _MaskedMonotoneLayer(eqx.Module):
+    w_past: Array
+    w_self_raw: Array
+    bias: Array
+    out_scale: PositiveParameter
+    strict_lower_mask: Array
+    base_activation: _Activation
+
+    def __init__(
+        self,
+        key: PRNGKeyArray,
+        *,
+        dim: int,
+        in_channels: int,
+        out_channels: int,
+        base_activation: _Activation,
+        w_past_scale: float,
+        w_self_scale: float,
+        out_scale_init: float,
+    ):
+        k1, k2 = jr.split(key, 2)
+        self.w_past = w_past_scale * jr.normal(k1, (dim, dim, in_channels, out_channels))
+        self.w_self_raw = w_self_scale * jr.normal(k2, (dim, in_channels, out_channels))
+        self.bias = jnp.zeros((dim, out_channels))
+        self.out_scale = PositiveParameter(jnp.full((dim, out_channels), out_scale_init))
+        self.strict_lower_mask = jnp.tril(jnp.ones((dim, dim)), k=-1)
+        self.base_activation = base_activation
+
+    def forward_and_diag_grad(self, z: Array, diag_in: Array) -> tuple[Array, Array]:
+        w_past = self.w_past * self.strict_lower_mask[:, :, None, None]
+        past_term = jnp.einsum("djco,jc->do", w_past, z)
+        w_self_pos = jnp.maximum(self.w_self_raw, 0.0)
+        w_self_neg = jnp.minimum(self.w_self_raw, 0.0)
+        self_pos = jnp.einsum("dco,dc->do", w_self_pos, z)
+        self_neg = jnp.einsum("dco,dc->do", w_self_neg, z)
+        pre_pos = past_term + self_pos + self.bias
+        pre_neg = past_term + self_neg + self.bias
+        act_pos = self.base_activation(pre_pos)
+        act_neg = self.base_activation(pre_neg)
+        z_next = self.out_scale.value * (act_pos - act_neg)
+
+        act_prime_pos = 0.5 * (1 + pre_pos / jnp.sqrt(pre_pos**2 + 4.0))
+        act_prime_neg = 0.5 * (1 + pre_neg / jnp.sqrt(pre_neg**2 + 4.0))
+        self_pos_diag = jnp.einsum("dco,dc->do", w_self_pos, diag_in)
+        self_neg_diag = jnp.einsum("dco,dc->do", -w_self_neg, diag_in)
+        diag_out = self.out_scale.value * (
+            act_prime_pos * self_pos_diag + act_prime_neg * self_neg_diag
+        )
+        return z_next, diag_out
