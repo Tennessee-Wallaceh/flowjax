@@ -9,7 +9,11 @@ from .coupling import Coupling
 from .exp import Exp
 from .jax_transforms import Scan, Vmap
 from .masked_autoregressive import MaskedAutoregressive
-from .monotonic_residual import DeepMonotonicResidual, MonotonicResidual
+from .monotonic_residual import (
+    DeepMonotonicResidual,
+    MonotonicResidual,
+    TriangularDeepMonotonicResidual,
+)
 from .orthogonal import DiscreteCosine, Householder
 from .planar import Planar
 from .power import Power
@@ -49,6 +53,7 @@ __all__ = [
     "MaskedAutoregressive",
     "MonotonicResidual",
     "DeepMonotonicResidual",
+    "TriangularDeepMonotonicResidual",
     "Indexed",
     "Permute",
     "Power",
