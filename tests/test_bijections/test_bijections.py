@@ -16,6 +16,7 @@ from flowjax.bijections import (
     Chain,
     Concatenate,
     Coupling,
+    DeepMonotonicResidual,
     DiscreteCosine,
     EmbedCondition,
     Exp,
@@ -170,6 +171,11 @@ bijections = {
     ),
     "Stack": lambda: Stack([Tanh(()), Affine(), Tanh(())]),
     "MonotonicResidual": lambda: MonotonicResidual(KEY, features=16),
+    "DeepMonotonicResidual": lambda: DeepMonotonicResidual(
+        KEY,
+        width=8,
+        num_hidden_layers=2,
+    ),
     "StackAxis1": lambda: Stack([Tanh((2,)), Affine(jnp.ones(2)), Tanh((2,))], axis=1),
     "StackAxis-1": lambda: Stack(
         [Affine(jr.uniform(k, (1, 2, 3))) for k in jr.split(KEY, 3)],
