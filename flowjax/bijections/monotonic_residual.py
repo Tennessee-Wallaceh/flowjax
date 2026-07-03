@@ -15,6 +15,24 @@ import math
 import numpy as np
 from scipy.stats import qmc
 
+def _sobol_centres(
+    key: PRNGKeyArray,
+    *,
+    n: int,
+    centre_dim: int,
+    lower: float,
+    upper: float,
+) -> Array:
+
+    seed = int(jr.randint(key, (), 0, np.iinfo(np.int32).max))
+    sampler = qmc.Sobol(d=centre_dim, scramble=True, seed=seed)
+
+    m = int(math.ceil(math.log2(n)))
+    u = sampler.random_base2(m=m)[:n]
+
+    centres = lower + (upper - lower) * u
+    return jnp.asarray(centres)
+
 
 class BoundedPositiveParameter(eqx.Module):
     raw: Array
@@ -47,297 +65,397 @@ class BoundedPositiveParameter(eqx.Module):
         p = jax.nn.sigmoid(self.raw)
         return self.min_value + (self.max_value - self.min_value) * p
 
-def _sobol_centres(
-    key: PRNGKeyArray,
-    *,
-    n: int,
-    centre_dim: int,
-    lower: float,
-    upper: float,
-) -> Array:
-
-    seed = int(jr.randint(key, (), 0, np.iinfo(np.int32).max))
-    sampler = qmc.Sobol(d=centre_dim, scramble=True, seed=seed)
-
-    m = int(math.ceil(math.log2(n)))
-    u = sampler.random_base2(m=m)[:n]
-
-    centres = lower + (upper - lower) * u
-    return jnp.asarray(centres)
-
 @runtime_checkable
 class _Activation(Protocol):
     def __call__(self, x: Array) -> Array: ...
+    
 
 
-@runtime_checkable
-class _MonotonicLayer(Protocol):
+class _BatchedSplitMonotonicLayer(eqx.Module):
     weight_raw: Array
-    bias: Array
-    out_scale: PositiveParameter
-
-    def forward_and_jacobian(self, x: Array) -> tuple[Array, Array]: ...
-
-
-class _SplitMonotonicLayer:
-    weight_raw: Array
-    bias: Array
-    out_scale: PositiveParameter
+    bias_pos: Array
+    bias_neg: Array
+    out_scale: BoundedPositiveParameter
     base_activation: _Activation
+
+    dim: int = eqx.field(static=True)
+    in_channels: int = eqx.field(static=True)
+    out_channels: int = eqx.field(static=True)
 
     def __init__(
         self,
         key: PRNGKeyArray,
         *,
-        in_dim: int,
-        out_dim: int,
+        dim: int,
+        in_channels: int,
+        out_channels: int,
         target_slope: float,
         w_scale: float,
+        out_scale_max: float,
         base_activation: _Activation,
+        centre_init_range: tuple[float, float] | None = None,
     ):
-        if in_dim < 1 or out_dim < 1:
-            raise ValueError(f"in_dim and out_dim must be >=1. Got in_dim={in_dim}, out_dim={out_dim}.")
+        if dim < 1:
+            raise ValueError(f"dim must be >= 1. Got {dim}.")
+        if in_channels < 1:
+            raise ValueError(f"in_channels must be >= 1. Got {in_channels}.")
+        if out_channels < 1:
+            raise ValueError(f"out_channels must be >= 1. Got {out_channels}.")
         if target_slope <= 0:
             raise ValueError(f"target_slope must be > 0. Got {target_slope}.")
         if w_scale <= 0:
             raise ValueError(f"w_scale must be > 0. Got {w_scale}.")
+        if out_scale_max <= 0:
+            raise ValueError(f"out_scale_max must be > 0. Got {out_scale_max}.")
 
+        k_w, k_centres = jr.split(key, 2)
+
+        self.dim = dim
+        self.in_channels = in_channels
+        self.out_channels = out_channels
         self.base_activation = base_activation
-        w = w_scale * jr.normal(key, (out_dim, in_dim))
+
+        w = w_scale * jr.normal(k_w, (dim, out_channels, in_channels))
         self.weight_raw = w
-        self.bias = jnp.zeros((out_dim,))
 
-        mean_abs_w = jnp.mean(jnp.abs(w), axis=1)
+        w_pos = jnp.maximum(w, 0.0)
+        w_neg = jnp.minimum(w, 0.0)
+
+        if centre_init_range is not None:
+            lower, upper = centre_init_range
+
+            centres = _sobol_centres(
+                k_centres,
+                n=dim * out_channels,
+                centre_dim=in_channels,
+                lower=lower,
+                upper=upper,
+            )
+            centres = centres.reshape(dim, out_channels, in_channels)
+
+            self.bias_pos = -jnp.einsum("doi,doi->do", w_pos, centres)
+            self.bias_neg = -jnp.einsum("doi,doi->do", w_neg, centres)
+        else:
+            self.bias_pos = jnp.zeros((dim, out_channels))
+            self.bias_neg = jnp.zeros((dim, out_channels))
+
         eps = 1e-8
-        v0 = target_slope / (mean_abs_w + eps)
-        if not bool(jnp.all(jnp.isfinite(v0))):
-            raise ValueError("Computed invalid out-scale initialization.")
-        self.out_scale = PositiveParameter(jnp.clip(v0, a_min=eps))
 
-    def forward_and_jacobian(self, x: Array) -> tuple[Array, Array]:
+        # At zero / near a centre, squareplus'(0) = 0.5, so the rough
+        # per-output derivative magnitude is:
+        #
+        #     0.5 * out_scale * sum(abs(w), axis=-1)
+        #
+        # This initializes each output channel to have approximately
+        # `target_slope` local derivative scale.
+        sum_abs_w = jnp.sum(jnp.abs(w), axis=-1)
+        v0 = 2.0 * target_slope / (sum_abs_w + eps)
+        v0 = jnp.clip(v0, min=eps, max=0.95 * out_scale_max)
+
+        self.out_scale = BoundedPositiveParameter(
+            v0,
+            min_value=1e-6,
+            max_value=out_scale_max,
+        )
+
+    @staticmethod
+    def _squareplus_and_prime(x: Array) -> tuple[Array, Array]:
+        root = jnp.sqrt(x * x + 4.0)
+        act = 0.5 * (x + root)
+        act_prime = 0.5 * (1.0 + x / root)
+        return act, act_prime
+
+    def forward_and_jacobian(
+        self,
+        z: Array,
+        jac_in: Array,
+    ) -> tuple[Array, Array]:
+        """Forward pass and scalar-input Jacobian propagation.
+
+        Args:
+            z: shape (dim, in_channels)
+            jac_in: shape (dim, in_channels), where jac_in[d, c] is
+                d z[d, c] / d x[d].
+
+        Returns:
+            z_next: shape (dim, out_channels)
+            jac_out: shape (dim, out_channels), where jac_out[d, o] is
+                d z_next[d, o] / d x[d].
+        """
         w = self.weight_raw
-        b = self.bias
         v = self.out_scale.value
 
         w_pos = jnp.maximum(w, 0.0)
         w_neg = jnp.minimum(w, 0.0)
-        pre_pos = w_pos @ x + b
-        pre_neg = w_neg @ x + b
 
-        act_pos = self.base_activation(pre_pos)
-        act_neg = self.base_activation(pre_neg)
-        y = v * (act_pos - act_neg)
+        pre_pos = jnp.einsum("doi,di->do", w_pos, z) + self.bias_pos
+        pre_neg = jnp.einsum("doi,di->do", w_neg, z) + self.bias_neg
 
-        act_prime_pos = 0.5 * (1 + pre_pos / jnp.sqrt(pre_pos**2 + 4.0))
-        act_prime_neg = 0.5 * (1 + pre_neg / jnp.sqrt(pre_neg**2 + 4.0))
-        jac = (v[:, None] * (act_prime_pos[:, None] * w_pos - act_prime_neg[:, None] * w_neg))
-        return y, jac
+        act_pos, act_prime_pos = self._squareplus_and_prime(pre_pos)
+        act_neg, act_prime_neg = self._squareplus_and_prime(pre_neg)
+
+        z_next = v * (act_pos - act_neg)
+
+        jac_pos = jnp.einsum("doi,di->do", w_pos, jac_in)
+        jac_neg = jnp.einsum("doi,di->do", -w_neg, jac_in)
+
+        jac_out = v * (
+            act_prime_pos * jac_pos
+            + act_prime_neg * jac_neg
+        )
+
+        return z_next, jac_out
 
 
-class MonotonicResidual(AbstractBijection):
-    r"""Scalar residual bijection :math:`T(x)=\sigma x + g(x)`.
+class DeepMarginalMonotonicResidual(AbstractBijection):
+    r"""Elementwise deep monotone residual bijection.
 
-    Uses the split construction over input-side weights
-    :math:`g(x)=\sum_i v_i [\phi(w_i^+x+b_i)-\phi(w_i^-x+b_i)] + c`.
+    For each dimension d:
+
+        T_d(x_d) = sigma_d * x_d + h_d(x_d)
+
+    where h_d is an independent deep monotone network shared in shape but
+    not parameters across dimensions.
+
+    Example with num_hidden_layers=2 and width=5:
+
+        1 -> 5 -> 5 -> 1
     """
 
-    shape: ClassVar[tuple[int, ...]] = ()
+    shape: tuple[int, ...]
     cond_shape: ClassVar[None] = None
 
     sigma: PositiveParameter
-    out_scale: PositiveParameter
-    in_weight_raw: Array
-    bias: Array
+    hidden_layers: tuple[_BatchedSplitMonotonicLayer, ...]
+    head: _BatchedSplitMonotonicLayer
     intercept: Array
+    inverse_lower: Array
+    inverse_upper: Array
     base_activation: _Activation
 
     def __init__(
         self,
         key: PRNGKeyArray,
         *,
-        features: int = 32,
-        rho: float = 0.75,
+        dim: int,
+        width: int = 5,
+        num_hidden_layers: int = 2,
+        rho: float = 0.05,
         w_scale: float = 0.1,
+        hidden_out_scale_max: float = 1.0,
+        head_out_scale_max: float = 2.0,
+        inverse_bracket: tuple[float, float] = (-20.0, 20.0),
+        per_dim_sigma: bool = True,
+        input_centre_init_range: tuple[float, float] | None = (-5.0, 5.0),
+        hidden_centre_init_range: tuple[float, float] | None = (-2.0, 2.0),
+        head_centre_init_range: tuple[float, float] | None = None,
     ):
-        if features < 1:
-            raise ValueError("features must be a positive integer.")
-        if not (0.0 < rho < 1.0):
-            raise ValueError(f"rho must be in (0, 1). Got {rho}.")
-        if w_scale <= 0:
-            raise ValueError(f"w_scale must be > 0. Got {w_scale}.")
-
-        self.base_activation = jax.nn.squareplus
-        target_residual_slope = 1.0 - rho
-
-        k1 = jr.split(key, 1)[0]
-        w = w_scale * jr.normal(k1, (features,))
-        b = jnp.zeros((features,))
-
-        mean_abs_w = jnp.mean(jnp.abs(w))
-        eps = 1e-8
-        v0 = 2.0 * target_residual_slope / (features * mean_abs_w + eps)
-        if not bool(jnp.isfinite(v0)):
-            raise ValueError(
-                "Computed invalid v0 during initialization; check rho, features and w_scale. "
-                f"Got v0={v0}, mean_abs_w={mean_abs_w}."
-            )
-        v = v0 * jnp.ones((features,))
-
-        self.in_weight_raw = w
-        self.bias = b
-
-        # Calibrate v to hit residual slope target using the exact local derivative at x=0.
-        w_pos = jnp.maximum(w, 0.0)
-        w_neg = jnp.minimum(w, 0.0)
-        pre_pos0 = b
-        pre_neg0 = b
-        act_prime0 = 0.5 * (1 + b / jnp.sqrt(b**2 + 4.0))
-        dgdx_terms0 = v * (act_prime0 * w_pos - act_prime0 * w_neg)
-        dgdx0 = jnp.sum(dgdx_terms0)
-        rescale = target_residual_slope / (dgdx0 + eps)
-        v = v * rescale
-
-        self.out_scale = PositiveParameter(jnp.clip(v, a_min=eps))
-
-        g0 = jnp.sum(self.out_scale.value * (self.base_activation(pre_pos0) - self.base_activation(pre_neg0)))
-        self.intercept = -g0
-        self.sigma = PositiveParameter(jnp.asarray(rho), min_value=1e-6)
-
-    def _g_and_log_grad(self, x: Array) -> tuple[Array, Array]:
-        w = self.in_weight_raw
-        b = self.bias
-        v = self.out_scale.value
-
-        w_pos = jnp.maximum(w, 0.0)
-        w_neg = jnp.minimum(w, 0.0)
-        pre_pos = w_pos * x + b
-        pre_neg = w_neg * x + b
-
-        act_pos = self.base_activation(pre_pos)
-        act_neg = self.base_activation(pre_neg)
-        g = jnp.sum(v * (act_pos - act_neg)) + self.intercept
-
-        act_prime_pos = 0.5 * (1 + pre_pos / jnp.sqrt(pre_pos**2 + 4.0))
-        act_prime_neg = 0.5 * (1 + pre_neg / jnp.sqrt(pre_neg**2 + 4.0))
-        dgdx_terms = v * (act_prime_pos * w_pos - act_prime_neg * w_neg)
-
-        tiny = jnp.finfo(w.dtype).tiny
-        log_dgdx = jax.scipy.special.logsumexp(jnp.log(jnp.clip(dgdx_terms, a_min=tiny)))
-        return g, log_dgdx
-
-    def transform_and_log_det(self, x, condition=None):
-        g, log_dgdx = self._g_and_log_grad(x)
-        log_dydx = jnp.logaddexp(jnp.log(self.sigma.value), log_dgdx)
-        y = self.sigma.value * x + g
-        return y, log_dydx
-
-    def inverse_and_log_det(self, y, condition=None):
-        root, _ = bisection_search(
-            lambda x: self.transform(x) - y,
-            lower=jnp.asarray(-1.0),
-            upper=jnp.asarray(1.0),
-        )
-        _, log_det = self.transform_and_log_det(root)
-        return root, -log_det
-
-
-class DeepMonotonicResidual(AbstractBijection):
-    r"""Deep scalar residual bijection :math:`T(x)=\sigma x + h(x)`, with :math:`h:\mathbb{R}\to\mathbb{R}`."""
-
-    shape: ClassVar[tuple[int, ...]] = ()
-    cond_shape: ClassVar[None] = None
-
-    sigma: PositiveParameter
-    intercept: Array
-    input_layer: _MonotonicLayer
-    hidden_layers: tuple[_MonotonicLayer, ...]
-    output_layer: _MonotonicLayer
-
-    def __init__(
-        self,
-        key: PRNGKeyArray,
-        *,
-        width: int = 32,
-        num_hidden_layers: int = 1,
-        rho: float = 0.75,
-        w_scale: float = 0.1,
-    ):
+        if dim < 1:
+            raise ValueError(f"dim must be >= 1. Got {dim}.")
         if width < 1:
             raise ValueError(f"width must be >= 1. Got {width}.")
-        if num_hidden_layers < 0:
-            raise ValueError(f"num_hidden_layers must be >= 0. Got {num_hidden_layers}.")
+        if num_hidden_layers < 1:
+            raise ValueError(
+                f"num_hidden_layers must be >= 1. Got {num_hidden_layers}."
+            )
         if not (0.0 < rho < 1.0):
             raise ValueError(f"rho must be in (0, 1). Got {rho}.")
         if w_scale <= 0:
             raise ValueError(f"w_scale must be > 0. Got {w_scale}.")
+        if hidden_out_scale_max <= 0:
+            raise ValueError(
+                f"hidden_out_scale_max must be > 0. Got {hidden_out_scale_max}."
+            )
+        if head_out_scale_max <= 0:
+            raise ValueError(
+                f"head_out_scale_max must be > 0. Got {head_out_scale_max}."
+            )
+        if inverse_bracket[0] >= inverse_bracket[1]:
+            raise ValueError(
+                f"Expected inverse_bracket lower < upper. Got {inverse_bracket}."
+            )
 
-        self.sigma = PositiveParameter(jnp.asarray(rho), min_value=1e-6)
-        self.intercept = jnp.asarray(0.0)
+        self.shape = (dim,)
         self.base_activation = jax.nn.squareplus
 
-        n_layers = num_hidden_layers + 2
-        keys = jr.split(key, n_layers)
-        target_residual_slope = 1.0 - rho
-        per_layer_slope = target_residual_slope ** (1.0 / max(n_layers, 1))
+        self.inverse_lower = jnp.asarray(inverse_bracket[0])
+        self.inverse_upper = jnp.asarray(inverse_bracket[1])
 
-        self.input_layer = _SplitMonotonicLayer(
-            keys[0],
-            in_dim=1,
-            out_dim=width,
-            target_slope=per_layer_slope,
-            w_scale=w_scale,
-            base_activation=self.base_activation,
-        )
+        sigma0 = jnp.full((dim,), rho) if per_dim_sigma else jnp.asarray(rho)
+        self.sigma = PositiveParameter(sigma0, min_value=1e-6)
+
+        keys = jr.split(key, num_hidden_layers + 1)
+
+        # Hidden layers are feature maps, so do not make each hidden layer
+        # carry the whole residual slope budget. The head is calibrated later.
+        hidden_target_slope = 1.0
+        target_residual_slope = 1.0 - rho
+
         self.hidden_layers = tuple(
-            _SplitMonotonicLayer(
-                keys[i + 1],
-                in_dim=width,
-                out_dim=width,
-                target_slope=per_layer_slope,
+            _BatchedSplitMonotonicLayer(
+                keys[i],
+                dim=dim,
+                in_channels=1 if i == 0 else width,
+                out_channels=width,
+                target_slope=hidden_target_slope,
                 w_scale=w_scale,
+                out_scale_max=hidden_out_scale_max,
                 base_activation=self.base_activation,
+                centre_init_range=(
+                    input_centre_init_range
+                    if i == 0
+                    else hidden_centre_init_range
+                ),
             )
             for i in range(num_hidden_layers)
         )
-        self.output_layer = _SplitMonotonicLayer(
+
+        self.head = _BatchedSplitMonotonicLayer(
             keys[-1],
-            in_dim=width,
-            out_dim=1,
-            target_slope=per_layer_slope,
+            dim=dim,
+            in_channels=width,
+            out_channels=1,
+            target_slope=target_residual_slope,
             w_scale=w_scale,
+            out_scale_max=head_out_scale_max,
             base_activation=self.base_activation,
+            centre_init_range=head_centre_init_range,
         )
 
-        g0, _ = self._h_and_dhdx(jnp.asarray(0.0))
-        self.intercept = -g0
+        self._calibrate_identity_slope()
 
-    def _h_and_dhdx(self, x: Array) -> tuple[Array, Array]:
-        z, jac = self.input_layer.forward_and_jacobian(jnp.atleast_1d(x))
+        h0, _ = self._h_and_grad(jnp.zeros((dim,)))
+        self.intercept = -h0
+
+    def _h_and_grad(self, x: Array) -> tuple[Array, Array]:
+        """Evaluate h(x) and dh/dx elementwise.
+
+        Args:
+            x: shape (dim,)
+
+        Returns:
+            h: shape (dim,)
+            dhdx: shape (dim,)
+        """
+        z = x[:, None]
+        jac = jnp.ones_like(z)
+
         for layer in self.hidden_layers:
-            z_new, jac_layer = layer.forward_and_jacobian(z)
-            jac = jac_layer @ jac
-            z = z_new
-        out, jac_out = self.output_layer.forward_and_jacobian(z)
-        dhdx = (jac_out @ jac).squeeze()
-        return out.squeeze(), dhdx
+            z, jac = layer.forward_and_jacobian(z, jac)
+
+        h, dhdx = self.head.forward_and_jacobian(z, jac)
+
+        return h.squeeze(axis=-1), dhdx.squeeze(axis=-1)
+
+    def _calibrate_identity_slope(self):
+        """Calibrate head scale so initial derivative is near identity at zero.
+
+        The intended initialization is:
+
+            sigma + dh/dx ≈ 1
+
+        at x = 0.
+        """
+        x0 = jnp.zeros((self.shape[0],))
+        _, dhdx0 = self._h_and_grad(x0)
+
+        sigma = jnp.broadcast_to(self.sigma.value, self.shape)
+        target = 1.0 - sigma
+
+        ratio = target / jnp.clip(dhdx0, min=1e-8)
+
+        new_value = self.head.out_scale.value * ratio[:, None]
+        new_value = jnp.clip(
+            new_value,
+            min=self.head.out_scale.min_value,
+            max=0.95 * self.head.out_scale.max_value,
+        )
+
+        self.head = eqx.tree_at(
+            lambda layer: layer.out_scale,
+            self.head,
+            BoundedPositiveParameter(
+                new_value,
+                min_value=self.head.out_scale.min_value,
+                max_value=self.head.out_scale.max_value,
+            ),
+        )
 
     def transform_and_log_det(self, x, condition=None):
-        h, dhdx = self._h_and_dhdx(x)
-        dydx = self.sigma.value + dhdx
-        tiny = jnp.finfo(jnp.asarray(dydx).dtype).tiny
-        log_dydx = jnp.log(jnp.clip(dydx, a_min=tiny))
-        y = self.sigma.value * x + h + self.intercept
-        return y, log_dydx
+
+        if x.shape != self.shape:
+            raise ValueError(f"Expected x.shape={self.shape}, got {x.shape}.")
+
+        h, dhdx = self._h_and_grad(x)
+        h = h + self.intercept
+
+        sigma = jnp.broadcast_to(self.sigma.value, self.shape)
+
+        y = sigma * x + h
+        dydx = sigma + dhdx
+
+        tiny = jnp.finfo(x.dtype).tiny
+        logdet = jnp.sum(jnp.log(jnp.clip(dydx, min=tiny)))
+
+        return y, logdet
 
     def inverse_and_log_det(self, y, condition=None):
-        root, _ = bisection_search(
-            lambda x: self.transform(x) - y,
-            lower=jnp.asarray(-1.0),
-            upper=jnp.asarray(1.0),
-        )
-        _, log_det = self.transform_and_log_det(root)
-        return root, -log_det
+        """Vectorized bisection inverse.
 
+        Since the transform is elementwise, this bisects all dimensions
+        simultaneously. This is much better than vmapping scalar bisection
+        that calls a full transform per coordinate.
+        """
+
+        if y.shape != self.shape:
+            raise ValueError(f"Expected y.shape={self.shape}, got {y.shape}.")
+
+        lower = jnp.full_like(y, self.inverse_lower)
+        upper = jnp.full_like(y, self.inverse_upper)
+
+        def body(carry, _):
+            lower, upper = carry
+            mid = 0.5 * (lower + upper)
+
+            f_lower = self.transform(lower)[0] - y
+            f_mid = self.transform(mid)[0] - y
+
+            same_sign = jnp.sign(f_lower) == jnp.sign(f_mid)
+
+            lower = jnp.where(same_sign, mid, lower)
+            upper = jnp.where(same_sign, upper, mid)
+
+            return (lower, upper), None
+
+        (lower, upper), _ = jax.lax.scan(
+            body,
+            (lower, upper),
+            xs=None,
+            length=32,
+        )
+
+        x = 0.5 * (lower + upper)
+        _, logdet = self.transform_and_log_det(x)
+
+        return x, -logdet
+
+    def derivative_summary(self, x: Array) -> dict[str, Array]:
+        """Small diagnostic helper."""
+
+        _, dhdx = self._h_and_grad(x)
+        sigma = jnp.broadcast_to(self.sigma.value, self.shape)
+        dydx = sigma + dhdx
+
+        log_dydx = jnp.log(jnp.clip(dydx, min=jnp.finfo(x.dtype).tiny))
+
+        return {
+            "mean_log_dydx": jnp.mean(log_dydx),
+            "std_log_dydx": jnp.std(log_dydx),
+            "max_abs_log_dydx": jnp.max(jnp.abs(log_dydx)),
+            "min_dydx": jnp.min(dydx),
+            "max_dydx": jnp.max(dydx),
+        }
+    
 def _make_scale_gate_schedule(
     *,
     num_hidden_layers: int,
