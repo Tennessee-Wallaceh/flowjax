@@ -3,9 +3,12 @@
 from collections.abc import Callable
 from typing import ClassVar
 
+import jax
+import jax.nn as jnn
 import jax.numpy as jnp
 from jax.scipy.linalg import solve_triangular
-from jaxtyping import Array, ArrayLike, Shaped
+from jaxtyping import Array, ArrayLike, Shaped, PRNGKeyArray
+import equinox as eqx
 
 from flowjax.bijections.bijection import AbstractBijection
 from flowjax.parameters import PositiveParameter, TriangularParameter
@@ -202,3 +205,227 @@ class AdditiveCondition(AbstractBijection):
 
     def inverse_and_log_det(self, y, condition=None):
         return y - self.module(condition), jnp.zeros(())
+
+
+class LULinear(AbstractBijection):
+    shape: tuple[int, ...]
+    cond_shape = None
+
+    lower_entries: Array
+    upper_entries: Array
+    unconstrained_upper_diag: Array
+    bias: Array
+    eps: float = eqx.field(static=True)
+
+    def __init__(
+        self,
+        key: PRNGKeyArray,
+        dim: int,
+        *,
+        identity_init: bool = True,
+        eps: float = 1e-3,
+    ):
+        self.shape = (dim,)
+        self.eps = eps
+
+        n_triangular_entries = dim * (dim - 1) // 2
+
+        if identity_init:
+            self.lower_entries = jnp.zeros(n_triangular_entries)
+            self.upper_entries = jnp.zeros(n_triangular_entries)
+            self.unconstrained_upper_diag = jnp.full(
+                dim,
+                jnp.log(jnp.expm1(1.0 - eps)),
+            )
+        else:
+            lower_key, upper_key, diag_key = jax.random.split(key, 3)
+            bound = 1.0 / jnp.sqrt(dim)
+            self.lower_entries = jax.random.uniform(
+                lower_key,
+                (n_triangular_entries,),
+                minval=-bound,
+                maxval=bound,
+            )
+            self.upper_entries = jax.random.uniform(
+                upper_key,
+                (n_triangular_entries,),
+                minval=-bound,
+                maxval=bound,
+            )
+            self.unconstrained_upper_diag = jax.random.uniform(
+                diag_key,
+                (dim,),
+                minval=-bound,
+                maxval=bound,
+            )
+
+        self.bias = jnp.zeros(dim)
+
+    @property
+    def lower_indices(self) -> tuple[Array, Array]:
+        return jnp.tril_indices(self.shape[0], k=-1)
+
+    @property
+    def upper_indices(self) -> tuple[Array, Array]:
+        return jnp.triu_indices(self.shape[0], k=1)
+
+    @property
+    def diag_indices(self) -> tuple[Array, Array]:
+        return jnp.diag_indices(self.shape[0])
+    
+    @property
+    def upper_diag(self):
+        return jnn.softplus(self.unconstrained_upper_diag) + self.eps
+
+    def _lower_upper(self):
+        dim = self.shape[0]
+
+        lower = jnp.zeros((dim, dim))
+        lower = lower.at[self.lower_indices].set(self.lower_entries)
+        lower = lower.at[self.diag_indices].set(1.0)
+
+        upper = jnp.zeros((dim, dim))
+        upper = upper.at[self.upper_indices].set(self.upper_entries)
+        upper = upper.at[self.diag_indices].set(self.upper_diag)
+
+        return lower, upper
+
+    def weight(self):
+        lower, upper = self._lower_upper()
+        return lower @ upper
+
+    def transform_and_log_det(self, x, condition=None):
+        lower, upper = self._lower_upper()
+        y = lower @ (upper @ x) + self.bias
+        log_det = jnp.sum(jnp.log(self.upper_diag))
+        return y, log_det
+
+    def inverse_and_log_det(self, y, condition=None):
+        lower, upper = self._lower_upper()
+        z = y - self.bias
+        z = jax.scipy.linalg.solve_triangular(
+            lower,
+            z,
+            lower=True,
+            unit_diagonal=True,
+        )
+        x = jax.scipy.linalg.solve_triangular(
+            upper,
+            z,
+            lower=False,
+        )
+        log_det = -jnp.sum(jnp.log(self.upper_diag))
+        return x, log_det
+
+
+class UnitLULinear(AbstractBijection):
+    shape: tuple[int, ...]
+    cond_shape = None
+
+    lower_entries: Array
+    upper_entries: Array
+    unconstrained_upper_diag: Array
+    bias: Array
+    eps: float = eqx.field(static=True)
+
+    def __init__(
+        self,
+        key: PRNGKeyArray,
+        dim: int,
+        *,
+        identity_init: bool = True,
+        eps: float = 1e-3,
+    ):
+        self.shape = (dim,)
+        self.eps = eps
+
+        n_triangular_entries = dim * (dim - 1) // 2
+
+        if identity_init:
+            self.lower_entries = jnp.zeros(n_triangular_entries)
+            self.upper_entries = jnp.zeros(n_triangular_entries)
+            self.unconstrained_upper_diag = jnp.full(
+                dim,
+                jnp.log(jnp.expm1(1.0 - eps)),
+            )
+        else:
+            lower_key, upper_key, diag_key = jax.random.split(key, 3)
+            bound = 1.0 / jnp.sqrt(dim)
+            self.lower_entries = jax.random.uniform(
+                lower_key,
+                (n_triangular_entries,),
+                minval=-bound,
+                maxval=bound,
+            )
+            self.upper_entries = jax.random.uniform(
+                upper_key,
+                (n_triangular_entries,),
+                minval=-bound,
+                maxval=bound,
+            )
+            self.unconstrained_upper_diag = jax.random.uniform(
+                diag_key,
+                (dim,),
+                minval=-bound,
+                maxval=bound,
+            )
+
+        self.bias = jnp.zeros(dim)
+
+    @property
+    def lower_indices(self) -> tuple[Array, Array]:
+        return jnp.tril_indices(self.shape[0], k=-1)
+
+    @property
+    def upper_indices(self) -> tuple[Array, Array]:
+        return jnp.triu_indices(self.shape[0], k=1)
+
+    @property
+    def diag_indices(self) -> tuple[Array, Array]:
+        return jnp.diag_indices(self.shape[0])
+    
+    @property
+    def upper_diag(self):
+        upper_diag = jnn.softplus(self.unconstrained_upper_diag) + self.eps
+        log_upper_diag = jnp.log(upper_diag)
+        return jnp.exp(log_upper_diag - jnp.mean(log_upper_diag))
+
+    def _lower_upper(self):
+        dim = self.shape[0]
+
+        lower = jnp.zeros((dim, dim))
+        lower = lower.at[self.lower_indices].set(self.lower_entries)
+        lower = lower.at[self.diag_indices].set(1.0)
+
+        upper = jnp.zeros((dim, dim))
+        upper = upper.at[self.upper_indices].set(self.upper_entries)
+        upper = upper.at[self.diag_indices].set(self.upper_diag)
+
+        return lower, upper
+
+    def weight(self):
+        lower, upper = self._lower_upper()
+        return lower @ upper
+
+    def transform_and_log_det(self, x, condition=None):
+        lower, upper = self._lower_upper()
+        y = lower @ (upper @ x) + self.bias
+        log_det = jnp.zeros((), dtype=x.dtype)
+        return y, log_det
+
+    def inverse_and_log_det(self, y, condition=None):
+        lower, upper = self._lower_upper()
+        z = y - self.bias
+        z = jax.scipy.linalg.solve_triangular(
+            lower,
+            z,
+            lower=True,
+            unit_diagonal=True,
+        )
+        x = jax.scipy.linalg.solve_triangular(
+            upper,
+            z,
+            lower=False,
+        )
+        log_det = jnp.zeros((), dtype=y.dtype)
+        return x, log_det
