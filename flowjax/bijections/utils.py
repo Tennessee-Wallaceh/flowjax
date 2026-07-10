@@ -10,7 +10,10 @@ import lineax as lx
 import numpy as np
 from jaxtyping import Array, Int
 
-from flowjax.bijections.bijection import AbstractBijection
+from flowjax.bijections.bijection import (
+    AbstractBijection,
+    AbstractDeterministicBijection,
+)
 from flowjax.bijections.chain import Chain
 from flowjax.utils import arraylike_to_array, check_shapes_match, merge_cond_shapes
 
@@ -20,9 +23,9 @@ class Invert(AbstractBijection):
 
     This wraps a bijection, such that the transform methods become the inverse
     methods and vice versa. Note that in general, we define bijections such that
-    the forward methods are preffered, i.e. faster/actually implemented. For
-    training flows, we generally want the inverse method (used in density
-    evaluation), to be faster. Hence it is often useful to use this class to
+    the forward methods are preferred, i.e. faster or actually implemented. For
+    training flows, we generally want the inverse method, used in density
+    evaluation, to be faster. Hence it is often useful to use this class to
     achieve this aim.
 
     Args:
@@ -35,8 +38,8 @@ class Invert(AbstractBijection):
 
     def __init__(self, bijection: AbstractBijection):
         self.bijection = bijection
-        self.shape = self.bijection.shape
-        self.cond_shape = self.bijection.cond_shape
+        self.shape = bijection.shape
+        self.cond_shape = bijection.cond_shape
 
     def transform_and_log_det(self, x, condition=None):
         return self.bijection.inverse_and_log_det(x, condition)
@@ -45,7 +48,7 @@ class Invert(AbstractBijection):
         return self.bijection.transform_and_log_det(y, condition)
 
 
-class Permute(AbstractBijection):
+class Permute(AbstractDeterministicBijection):
     """Permutation transformation.
 
     Args:
@@ -86,7 +89,7 @@ class Permute(AbstractBijection):
         return y[self.inverse_permutation], jnp.zeros(())
 
 
-class Flip(AbstractBijection):
+class Flip(AbstractDeterministicBijection):
     """Flip the input array. Condition argument is ignored.
 
     Args:
@@ -107,7 +110,7 @@ class Flip(AbstractBijection):
         return jnp.flip(y), jnp.zeros(())
 
 
-class Indexed(AbstractBijection):
+class Indexed(AbstractDeterministicBijection):
     """Applies bijection to specific indices of an input.
 
     Args:
@@ -151,7 +154,7 @@ class Indexed(AbstractBijection):
         return y.at[self.idxs].set(x), log_det
 
 
-class Identity(AbstractBijection):
+class Identity(AbstractDeterministicBijection):
     """The identity bijection.
 
     Args:

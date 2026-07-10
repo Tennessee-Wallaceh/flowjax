@@ -5,6 +5,7 @@ All these functions return a :class:`~flowjax.distributions.Transformed` distrib
 
 from collections.abc import Callable
 from functools import partial
+from typing import Literal
 
 import equinox as eqx
 import jax.nn as jnn
@@ -33,6 +34,8 @@ from flowjax.bijections import (
     Sandwich,
     Scan,
     TriangularAffine,
+    LULinear,
+    UnitLULinear,
     Vmap,
 )
 from flowjax.distributions import AbstractDistribution, Transformed
@@ -42,6 +45,8 @@ from flowjax.root_finding import (
     root_finder_to_inverter,
 )
 
+MixingStrategy = Literal["permutation", "lu", "unitlu", "none"]
+FinalLayer = Literal["unitlu", "lu", "none"]
 
 def _affine_with_min_scale(min_scale: float = 1e-2) -> Affine:
     scale = PositiveParameter(jnp.array(1.0), min_value=min_scale)
@@ -110,8 +115,10 @@ def masked_autoregressive_flow(
     flow_layers: int = 8,
     nn_width: int = 50,
     nn_depth: int = 1,
+    residual_connection_length: int | None = None,
     nn_activation: Callable = jnn.relu,
     invert: bool = True,
+    mixing_strategy: MixingStrategy = "permutation",
 ) -> Transformed:
     """Masked autoregressive flow.
 
@@ -138,7 +145,7 @@ def masked_autoregressive_flow(
     dim = base_dist.shape[-1]
 
     def make_layer(key):  # masked autoregressive layer + permutation
-        bij_key, perm_key = jr.split(key)
+        bij_key, mixing_key = jr.split(key)
         bijection = MaskedAutoregressive(
             key=bij_key,
             transformer=transformer,
@@ -147,8 +154,14 @@ def masked_autoregressive_flow(
             nn_width=nn_width,
             nn_depth=nn_depth,
             nn_activation=nn_activation,
+            residual_connection_length=residual_connection_length,
         )
-        return _add_default_permute(bijection, dim, perm_key)
+        return _add_mixing(
+            bijection,
+            dim=dim,
+            key=mixing_key,
+            mixing_strategy=mixing_strategy,
+        )
 
     keys = jr.split(key, flow_layers)
     layers = eqx.filter_vmap(make_layer)(keys)
@@ -352,11 +365,37 @@ def triangular_spline_flow(
     return Transformed(base_dist, bijection)
 
 
-def _add_default_permute(bijection: AbstractBijection, dim: int, key: PRNGKeyArray):
+def _add_mixing(
+    bijection: AbstractBijection,
+    *,
+    dim: int,
+    key: PRNGKeyArray,
+    mixing_strategy: MixingStrategy,
+) -> AbstractBijection:
+    if mixing_strategy == "none":
+        return bijection
+
     if dim == 1:
         return bijection
-    if dim == 2:
-        return Chain([bijection, Flip((dim,))]).merge_chains()
+    
+    if mixing_strategy == "permutation":
+        if dim == 2:
+            return Chain([bijection, Flip((dim,))]).merge_chains()
+        perm = Permute(jr.permutation(key, jnp.arange(dim)))
+        return Chain([bijection, perm]).merge_chains()
 
-    perm = Permute(jr.permutation(key, jnp.arange(dim)))
-    return Chain([bijection, perm]).merge_chains()
+    if mixing_strategy == "lu":
+        perm_key, lu_key = jr.split(key)
+        return Chain([
+            bijection,
+            LULinear(key=lu_key, dim=dim),
+            Permute(jr.permutation(perm_key, jnp.arange(dim))),
+        ])
+    
+    if mixing_strategy == "unitlu":
+        perm_key, lu_key = jr.split(key)
+        return Chain([
+            bijection,
+            UnitLULinear(key=lu_key, dim=dim),
+            Permute(jr.permutation(perm_key, jnp.arange(dim))),
+        ])

@@ -1,11 +1,10 @@
-"""Module contains bijections formed by "concatenating" other bijections."""
+"""Module contains bijections formed by "stacking" other bijections."""
 
 from collections.abc import Sequence
 from itertools import accumulate
 
 import jax.numpy as jnp
 from jaxtyping import Array, PRNGKeyArray
-import equinox as eqx
 
 from flowjax.bijections.bijection import (
     AbstractBijection,
@@ -17,20 +16,22 @@ from flowjax.bijections.bijection import (
     _inverse_and_log_det_direct,
     _split_keys,
 )
-from flowjax.utils import merge_cond_shapes
+from flowjax.utils import check_shapes_match, merge_cond_shapes
 
-def concatenated_transform_and_log_det(
+def stacked_transform_and_log_det(
     bijections: tuple[AbstractBijection, ...],
     x: Array,
     *,
-    split_idxs: tuple[int, ...],
     axis: int,
     condition: Array | None = None,
     key: PRNGKeyArray | None = None,
     state: eqx.nn.State | None = None,
     inference: bool = True,
 ):
-    x_parts = jnp.array_split(x, split_idxs, axis=axis)
+    x_parts = (
+        x_i.squeeze(axis=axis)
+        for x_i in jnp.split(x, len(bijections), axis=axis)
+    )
     keys = _split_keys(bijections, key)
 
     y_parts = []
@@ -54,7 +55,7 @@ def concatenated_transform_and_log_det(
         y_parts.append(y_i)
         log_abs_det_jac += log_abs_det_jac_i.sum()
 
-    y = jnp.concatenate(y_parts, axis=axis)
+    y = jnp.stack(y_parts, axis=axis)
 
     if any(b.stateful for b in bijections):
         assert state is not None
@@ -62,18 +63,20 @@ def concatenated_transform_and_log_det(
 
     return y, log_abs_det_jac
 
-def concatenated_inverse_and_log_det(
+def stacked_inverse_and_log_det(
     bijections: tuple[AbstractBijection, ...],
     y: Array,
     *,
-    split_idxs: tuple[int, ...],
     axis: int,
     condition: Array | None = None,
     key: PRNGKeyArray | None = None,
     state: eqx.nn.State | None = None,
     inference: bool = True,
 ):
-    y_parts = jnp.array_split(y, split_idxs, axis=axis)
+    y_parts = (
+        y_i.squeeze(axis=axis)
+        for y_i in jnp.split(y, len(bijections), axis=axis)
+    )
     keys = _split_keys(bijections, key)
 
     x_parts = []
@@ -97,7 +100,7 @@ def concatenated_inverse_and_log_det(
         x_parts.append(x_i)
         log_abs_det_jac += log_abs_det_jac_i.sum()
 
-    x = jnp.concatenate(x_parts, axis=axis)
+    x = jnp.stack(x_parts, axis=axis)
 
     if any(b.stateful for b in bijections):
         assert state is not None
@@ -105,49 +108,46 @@ def concatenated_inverse_and_log_det(
 
     return x, log_abs_det_jac
 
-class DeterministicConcatenate(
+class DeterministicStack(
     AbstractDeterministicBijection[Array | None],
 ):
     shape: tuple[int, ...]
     cond_shape: tuple[int, ...] | None
-    split_idxs: tuple[int, ...]
     bijections: tuple[AbstractDeterministicBijection, ...]
     axis: int
 
     def transform_and_log_det(
         self,
-        x: ArrayLike,
+        x: Array,
         *,
         condition: Array | None = None,
     ) -> tuple[Array, Array]:
-        return concatenated_transform_and_log_det(
+        return stacked_transform_and_log_det(
             self.bijections,
             x,
-            split_idxs=self.split_idxs,
             axis=self.axis,
             condition=condition,
         )
 
     def inverse_and_log_det(
         self,
-        y: ArrayLike,
+        y: Array,
         *,
         condition: Array | None = None,
     ) -> tuple[Array, Array]:
-        return concatenated_inverse_and_log_det(
+        return stacked_inverse_and_log_det(
             self.bijections,
             y,
-            split_idxs=self.split_idxs,
             axis=self.axis,
             condition=condition,
         )
 
-class StochasticConcatenate(
+
+class StochasticStack(
     AbstractStochasticBijection[Array | None],
 ):
     shape: tuple[int, ...]
     cond_shape: tuple[int, ...] | None
-    split_idxs: tuple[int, ...]
     bijections: tuple[AbstractBijection, ...]
     axis: int
 
@@ -159,10 +159,9 @@ class StochasticConcatenate(
         key: PRNGKeyArray,
         inference: bool = True,
     ) -> tuple[Array, Array]:
-        return concatenated_transform_and_log_det(
+        return stacked_transform_and_log_det(
             self.bijections,
             x,
-            split_idxs=self.split_idxs,
             axis=self.axis,
             condition=condition,
             key=key,
@@ -171,43 +170,41 @@ class StochasticConcatenate(
 
     def inverse_and_log_det(
         self,
-        y: ArrayLike,
+        y: Array,
         *,
         condition: Array | None = None,
         key: PRNGKeyArray,
         inference: bool = True,
     ) -> tuple[Array, Array]:
-        return concatenated_inverse_and_log_det(
+        return stacked_inverse_and_log_det(
             self.bijections,
             y,
-            split_idxs=self.split_idxs,
             axis=self.axis,
             condition=condition,
             key=key,
             inference=inference,
         )
 
-class StatefulConcatenate(
+
+class StatefulStack(
     AbstractStatefulBijection[Array | None],
 ):
     shape: tuple[int, ...]
     cond_shape: tuple[int, ...] | None
-    split_idxs: tuple[int, ...]
     bijections: tuple[AbstractBijection, ...]
     axis: int
 
     def transform_and_log_det(
         self,
-        x: ArrayLike,
+        x: Array,
         *,
         condition: Array | None = None,
         state: eqx.nn.State,
         inference: bool = True,
     ) -> tuple[tuple[Array, Array], eqx.nn.State]:
-        return concatenated_transform_and_log_det(
+        return stacked_transform_and_log_det(
             self.bijections,
             x,
-            split_idxs=self.split_idxs,
             axis=self.axis,
             condition=condition,
             state=state,
@@ -216,44 +213,42 @@ class StatefulConcatenate(
 
     def inverse_and_log_det(
         self,
-        y: ArrayLike,
+        y: Array,
         *,
         condition: Array | None = None,
         state: eqx.nn.State,
         inference: bool = True,
     ) -> tuple[tuple[Array, Array], eqx.nn.State]:
-        return concatenated_inverse_and_log_det(
+        return stacked_inverse_and_log_det(
             self.bijections,
             y,
-            split_idxs=self.split_idxs,
             axis=self.axis,
             condition=condition,
             state=state,
             inference=inference,
         )
 
-class StochasticStatefulConcatenate(
+
+class StochasticStatefulStack(
     AbstractStochasticStatefulBijection[Array | None],
 ):
     shape: tuple[int, ...]
     cond_shape: tuple[int, ...] | None
-    split_idxs: tuple[int, ...]
     bijections: tuple[AbstractBijection, ...]
     axis: int
 
     def transform_and_log_det(
         self,
-        x: ArrayLike,
+        x: Array,
         *,
         condition: Array | None = None,
         key: PRNGKeyArray,
         state: eqx.nn.State,
         inference: bool = True,
     ) -> tuple[tuple[Array, Array], eqx.nn.State]:
-        return concatenated_transform_and_log_det(
+        return stacked_transform_and_log_det(
             self.bijections,
             x,
-            split_idxs=self.split_idxs,
             axis=self.axis,
             condition=condition,
             key=key,
@@ -263,17 +258,16 @@ class StochasticStatefulConcatenate(
 
     def inverse_and_log_det(
         self,
-        y: ArrayLike,
+        y: Array,
         *,
         condition: Array | None = None,
         key: PRNGKeyArray,
         state: eqx.nn.State,
         inference: bool = True,
     ) -> tuple[tuple[Array, Array], eqx.nn.State]:
-        return concatenated_inverse_and_log_det(
+        return stacked_inverse_and_log_det(
             self.bijections,
             y,
-            split_idxs=self.split_idxs,
             axis=self.axis,
             condition=condition,
             key=key,
@@ -281,71 +275,58 @@ class StochasticStatefulConcatenate(
             inference=inference,
         )
 
-def concatenate(
+def stack(
     bijections: Sequence[AbstractBijection],
     axis: int = 0,
 ) -> (
-    DeterministicConcatenate
-    | StochasticConcatenate
-    | StatefulConcatenate
-    | StochasticStatefulConcatenate
+    DeterministicStack
+    | StochasticStack
+    | StatefulStack
+    | StochasticStatefulStack
 ):
     bijections = tuple(bijections)
 
     shapes = [b.shape for b in bijections]
-    axis = range(len(shapes[0]))[axis]
+    check_shapes_match(shapes)
 
-    expected_matching = (
-        shapes[0][:axis]
-        + shapes[0][axis + 1 :]
-    )
-
-    for i, shape in enumerate(shapes):
-        if shape[:axis] + shape[axis + 1 :] != expected_matching:
-            raise ValueError(
-                f"Expected bijection shapes to match except along axis {axis}, "
-                f"but index 0 had shape {shapes[0]}, and index {i} had "
-                f"shape {shape}."
-            )
-
-    shape = (
-        shapes[0][:axis]
-        + (sum(s[axis] for s in shapes),)
-        + shapes[0][axis + 1 :]
-    )
-
-    split_idxs = tuple(
-        accumulate(s[axis] for s in shapes[:-1])
-    )
-
-    cond_shape = merge_cond_shapes(
-        [b.cond_shape for b in bijections]
-    )
-
-    kwargs = dict(
-        shape=shape,
-        cond_shape=cond_shape,
-        split_idxs=split_idxs,
-        bijections=bijections,
-        axis=axis,
-    )
+    shape = shapes[0][:axis] + (len(bijections),) + shapes[0][axis:]
+    cond_shape = merge_cond_shapes([b.cond_shape for b in bijections])
 
     match (
         any(b.stochastic for b in bijections),
         any(b.stateful for b in bijections),
     ):
         case False, False:
-            return DeterministicConcatenate(**kwargs)
+            return DeterministicStack(
+                shape=shape,
+                cond_shape=cond_shape,
+                bijections=bijections,
+                axis=axis,
+            )
 
         case True, False:
-            return StochasticConcatenate(**kwargs)
+            return StochasticStack(
+                shape=shape,
+                cond_shape=cond_shape,
+                bijections=bijections,
+                axis=axis,
+            )
 
         case False, True:
-            return StatefulConcatenate(**kwargs)
+            return StatefulStack(
+                shape=shape,
+                cond_shape=cond_shape,
+                bijections=bijections,
+                axis=axis,
+            )
 
         case True, True:
-            return StochasticStatefulConcatenate(**kwargs)
+            return StochasticStatefulStack(
+                shape=shape,
+                cond_shape=cond_shape,
+                bijections=bijections,
+                axis=axis,
+            )
 
         case _:
             raise TypeError()
-        

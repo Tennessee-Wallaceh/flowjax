@@ -1,5 +1,27 @@
 
-![FlowJAX](/docs/_static/logo_light.svg)
+## FlowJAX experimental fork
+
+The upstream project remains the canonical FlowJAX project. This fork should be
+treated as experimental.
+
+The main goals of this fork are to experiment with:
+- Equinox-style state management
+- Different abstractions using more explicit parameterisations
+- Some novel transformations 
+
+
+### Detailed Changlog
+*Alternative Abstractions*
+- Move to more explicit parameter access. This is less arguably ergonimic, but avoids objects being re-written at init time, allowing easier to follow logic.
+- Move away from automatic vectorisation, require the user to specify axes rules.
+
+*Equinox-style state*
+- Branch abstract base classes into deterministic, stochastic and stateful variants.
+- General methods now become functions which accept the distributions as inputs, and branch on the kind of distribution.
+
+*Minor Changes*
+- Seperate out bijections into individual files e.g move Invert from bijections/util.py into bijections/invert.py
+- Because of bijection variants arising from incorporating state, I found it more ergonomic to define certain "bijection transformations" as functions, ie Invert -> invert, which produces the appropriately inverted bijection.
 
 Distributions, bijections and normalizing flows using Equinox and JAX
 -----------------------------------------------------------------------

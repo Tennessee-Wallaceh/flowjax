@@ -1,13 +1,15 @@
 """Bijections from ``flowjax.bijections``."""
 
-from .affine import AdditiveCondition, Affine, Loc, Scale, TriangularAffine
+from .affine import AdditiveCondition, Affine, Loc, Scale, TriangularAffine, UnitLULinear, LULinear
 from .bijection import AbstractBijection
 from .block_autoregressive_network import BlockAutoregressiveNetwork
-from .chain import Chain
 from .concatenate import Concatenate, Stack
 from .coupling import Coupling
 from .exp import Exp
-from .jax_transforms import Scan, Vmap
+from .jax_transforms import Vmap
+from .scan import scan
+from .invert import invert
+from .chain import chain
 from .masked_autoregressive import MaskedAutoregressive
 # from .monotonic_residual import (
 #     DeepMonotonicResidual,
@@ -26,7 +28,6 @@ from .utils import (
     Flip,
     Identity,
     Indexed,
-    Invert,
     NumericalInverse,
     Permute,
     Reshape,
@@ -38,7 +39,7 @@ __all__ = [
     "Affine",
     "AbstractBijection",
     "BlockAutoregressiveNetwork",
-    "Chain",
+    "chain",
     "Concatenate",
     "Coupling",
     "DiscreteCosine",
@@ -47,9 +48,11 @@ __all__ = [
     "Flip",
     "Householder",
     "Identity",
-    "Invert",
+    "invert",
     "LeakyTanh",
     "Loc",
+    "LULinear",
+    "UnitLULinear",
     "MaskedAutoregressive",
     "Indexed",
     "Permute",
@@ -59,7 +62,7 @@ __all__ = [
     "Reshape",
     "Sandwich",
     "Scale",
-    "Scan",
+    "scan",
     "Sigmoid",
     "SoftPlus",
     "Stack",

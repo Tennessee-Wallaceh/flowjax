@@ -13,12 +13,12 @@ from jax.nn import softplus
 from jaxtyping import PRNGKeyArray
 
 from flowjax import masks
-from flowjax.bijections.bijection import AbstractBijection
+from flowjax.bijections.bijection import AbstractDeterministicBijection
 from flowjax.bijections.tanh import _tanh_log_grad
 from flowjax.parameters import MaskedWeightParameter
 
 
-class _CallableToBijection(AbstractBijection):
+class _CallableToBijection(AbstractDeterministicBijection):
     # Wrap a callable e.g. a function or a callable module. We assume the callable acts
     # on scalar values and log_det can be computed in a stable manner with jax.grad.
 
@@ -39,7 +39,7 @@ class _CallableToBijection(AbstractBijection):
         raise NotImplementedError()
 
 
-class _LeakyTanh(AbstractBijection):
+class _LeakyTanh(AbstractDeterministicBijection):
     min_grad: float = 0.01
     shape: ClassVar[tuple] = ()
     cond_shape: ClassVar[None] = None
@@ -79,7 +79,7 @@ class _TypedLinear(eqx.Module):
         return y
 
 
-class BlockAutoregressiveNetwork(AbstractBijection):
+class BlockAutoregressiveNetwork(AbstractDeterministicBijection):
     r"""Block Autoregressive Network (https://arxiv.org/abs/1904.04676).
 
     Note that in contrast to the original paper which uses tanh activations, by default
@@ -108,7 +108,7 @@ class BlockAutoregressiveNetwork(AbstractBijection):
     layers: list
     cond_linear: eqx.nn.Linear | None
     block_dim: int
-    activation: AbstractBijection
+    activation: AbstractDeterministicBijection
 
     def __init__(
         self,
@@ -118,12 +118,12 @@ class BlockAutoregressiveNetwork(AbstractBijection):
         cond_dim: int | None = None,
         depth: int,
         block_dim: int,
-        activation: AbstractBijection | Callable | None = None,
+        activation: AbstractDeterministicBijection | Callable | None = None,
     ):
         key, subkey = jr.split(key)
         activation = _LeakyTanh(0.01) if activation is None else activation
 
-        if isinstance(activation, AbstractBijection):
+        if isinstance(activation, AbstractDeterministicBijection):
             if activation.shape != () or activation.cond_shape is not None:
                 raise ValueError("Bijection must be unconditional with shape ().")
         else:

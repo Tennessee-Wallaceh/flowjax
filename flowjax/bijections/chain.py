@@ -2,78 +2,321 @@
 
 from collections.abc import Sequence
 
+import equinox as eqx
 import jax.numpy as jnp
-from jax import Array
+import jax.random as jrandom
+from jaxtyping import PRNGKeyArray, Array, ArrayLike
 
-from flowjax.bijections.bijection import AbstractBijection
+from flowjax.bijections.bijection import (
+    AbstractBijection,
+    AbstractDeterministicBijection,
+    AbstractStochasticBijection,
+    AbstractStatefulBijection,
+    AbstractStochasticStatefulBijection,
+    _transform_and_log_det_direct,
+    _inverse_and_log_det_direct,
+    _split_keys,
+)
 from flowjax.utils import check_shapes_match, merge_cond_shapes
 
+def chained_transform_and_log_det(
+    bijections: tuple[AbstractBijection, ...],
+    x: Array,
+    *,
+    condition: Array | None = None,
+    key: PRNGKeyArray | None = None,
+    state: eqx.nn.State | None = None,
+    inference: bool = True,
+) -> (
+    tuple[Array, Array]
+    | tuple[tuple[Array, Array], eqx.nn.State]
+):
+    """Apply a sequence of bijections in the forward direction."""
+    log_abs_det_jac = jnp.zeros(())
+    keys = _split_keys(bijections, key)
 
-class Chain(AbstractBijection):
-    """Compose arbitrary bijections to form another bijection.
+    for bijection, key_i in zip(bijections, keys):
+        x, log_abs_det_jac_i, state = _transform_and_log_det_direct(
+            bijection,
+            x,
+            condition=condition,
+            key=key_i,
+            state=state,
+            inference=inference,
+        )
 
-    If the layers you are chaining have consistent structure, consider using
-    :py:class:`~flowjax.bijections.Scan`, which will avoid seperately compiling each
-    layer.
+        log_abs_det_jac += log_abs_det_jac_i.sum()
 
-    Args:
-        bijections: Sequence of bijections. The bijection shapes must match, and any
-            none None condition shapes must match.
-    """
+    if any(bijection.stateful for bijection in bijections):
+        assert state is not None
+        return (x, log_abs_det_jac), state
 
-    shape: tuple[int, ...]
-    cond_shape: tuple[int, ...] | None
+    return x, log_abs_det_jac
+
+def chained_inverse_and_log_det(
+    bijections: tuple[AbstractBijection, ...],
+    y: Array,
+    *,
+    condition: Array | None = None,
+    key: PRNGKeyArray | None = None,
+    state: eqx.nn.State | None = None,
+    inference: bool = True,
+) -> (
+    tuple[Array, Array]
+    | tuple[tuple[Array, Array], eqx.nn.State]
+):
+    """Apply a sequence of bijections in the inverse direction."""
+    log_abs_det_jac = jnp.zeros(())
+    keys = _split_keys(bijections, key)
+
+    for bijection, key_i in zip(
+        reversed(bijections),
+        reversed(keys),
+    ):
+        y, log_abs_det_jac_i, state = _inverse_and_log_det_direct(
+            bijection,
+            y,
+            condition=condition,
+            key=key_i,
+            state=state,
+            inference=inference,
+        )
+
+        log_abs_det_jac += log_abs_det_jac_i.sum()
+
+    if any(bijection.stateful for bijection in bijections):
+        assert state is not None
+        return (y, log_abs_det_jac), state
+
+    return y, log_abs_det_jac
+
+
+class _AbstractChain:
     bijections: tuple[AbstractBijection, ...]
 
-    def __init__(
-        self,
-        bijections: Sequence[AbstractBijection],
-    ):
-        check_shapes_match([b.shape for b in bijections])
-        self.shape = bijections[0].shape
-        self.cond_shape = merge_cond_shapes([b.cond_shape for b in bijections])
-        self.bijections = tuple(bijections)
-
-    def transform_and_log_det(
-        self, x: Array, condition: Array | None = None
-    ) -> tuple[Array, Array]:
-        log_abs_det_jac = jnp.zeros(())
-        for bijection in self.bijections:
-            x, log_abs_det_jac_i = bijection.transform_and_log_det(x, condition)
-            log_abs_det_jac += log_abs_det_jac_i.sum()
-        return x, log_abs_det_jac
-
-    def inverse_and_log_det(
-        self, y: Array, condition: Array | None = None
-    ) -> tuple[Array, Array]:
-        log_abs_det_jac = jnp.zeros(())
-        for bijection in reversed(self.bijections):
-            y, log_abs_det_jac_i = bijection.inverse_and_log_det(y, condition)
-            log_abs_det_jac += log_abs_det_jac_i.sum()
-        return y, log_abs_det_jac
-
-    def __getitem__(self, i: int | slice) -> AbstractBijection:
+    def __getitem__(self, i: int | slice) -> AbstractBijection | "_AbstractChain":
         if isinstance(i, int):
             return self.bijections[i]
+
         if isinstance(i, slice):
-            return Chain(self.bijections[i])
-        raise TypeError(f"Indexing with type {type(i)} is not supported.")
+            return chain(self.bijections[i])
+
+        raise TypeError(
+            f"Indexing with type {type(i)} is not supported."
+        )
 
     def __iter__(self):
         yield from self.bijections
 
     def __len__(self):
         return len(self.bijections)
+    
+class DeterministicChain(
+    AbstractDeterministicBijection,
+):
+    bijections: tuple[AbstractDeterministicBijection, ...]
 
-    def merge_chains(self):
-        """Returns an equivilent Chain object, in which nested chains are flattened."""
-        bijections = self.bijections
-        while any(isinstance(b, Chain) for b in bijections):
-            bij = []
-            for b in bijections:
-                if isinstance(b, Chain):
-                    bij.extend(b.bijections)
-                else:
-                    bij.append(b)
-            bijections = bij
-        return Chain(bijections)
+    def transform_and_log_det(
+        self,
+        x: ArrayLike,
+        *,
+        condition: Array | None = None,
+    ) -> tuple[Array, Array]:
+        return chained_transform_and_log_det(
+            self.bijections,
+            x,
+            condition=condition,
+        )
+
+    def inverse_and_log_det(
+        self,
+        y: ArrayLike,
+        *,
+        condition: Array | None = None,
+    ) -> tuple[Array, Array]:
+        return chained_inverse_and_log_det(
+            self.bijections,
+            y,
+            condition=condition,
+        )
+    
+class StochasticChain(
+    AbstractStochasticBijection[Array | None],
+):
+    bijections: tuple[AbstractBijection, ...]
+
+    def transform_and_log_det(
+        self,
+        x: ArrayLike,
+        *,
+        condition: Array | None = None,
+        key: PRNGKeyArray,
+        inference: bool = True,
+    ) -> tuple[Array, Array]:
+        return chained_transform_and_log_det(
+            self.bijections,
+            x,
+            condition=condition,
+            key=key,
+            inference=inference,
+        )
+
+    def inverse_and_log_det(
+        self,
+        y: ArrayLike,
+        *,
+        condition: Array | None = None,
+        key: PRNGKeyArray,
+        inference: bool = True,
+    ) -> tuple[Array, Array]:
+        return chained_inverse_and_log_det(
+            self.bijections,
+            y,
+            condition=condition,
+            key=key,
+            inference=inference,
+        )
+    
+class StatefulChain(
+    AbstractStatefulBijection[Array | None],
+):
+    bijections: tuple[AbstractBijection, ...]
+
+    def transform_and_log_det(
+        self,
+        x: ArrayLike,
+        *,
+        condition: Array | None = None,
+        state: eqx.nn.State,
+        inference: bool = True,
+    ) -> tuple[tuple[Array, Array], eqx.nn.State]:
+        return chained_transform_and_log_det(
+            self.bijections,
+            x,
+            condition=condition,
+            state=state,
+            inference=inference,
+        )
+
+    def inverse_and_log_det(
+        self,
+        y: ArrayLike,
+        *,
+        condition: Array | None = None,
+        state: eqx.nn.State,
+        inference: bool = True,
+    ) -> tuple[tuple[Array, Array], eqx.nn.State]:
+        return chained_inverse_and_log_det(
+            self.bijections,
+            y,
+            condition=condition,
+            state=state,
+            inference=inference,
+        )
+
+class StochasticStatefulChain(
+    AbstractStochasticStatefulBijection[Array | None],
+):
+    bijections: tuple[AbstractBijection, ...]
+
+    def transform_and_log_det(
+        self,
+        x: ArrayLike,
+        *,
+        condition: Array | None = None,
+        key: PRNGKeyArray,
+        state: eqx.nn.State,
+        inference: bool = True,
+    ) -> tuple[tuple[Array, Array], eqx.nn.State]:
+        return chained_transform_and_log_det(
+            self.bijections,
+            x,
+            condition=condition,
+            key=key,
+            state=state,
+            inference=inference,
+        )
+
+    def inverse_and_log_det(
+        self,
+        y: ArrayLike,
+        *,
+        condition: Array | None = None,
+        key: PRNGKeyArray,
+        state: eqx.nn.State,
+        inference: bool = True,
+    ) -> tuple[tuple[Array, Array], eqx.nn.State]:
+        return chained_inverse_and_log_det(
+            self.bijections,
+            y,
+            condition=condition,
+            key=key,
+            state=state,
+            inference=inference,
+        )
+
+def merge_chains(bijections):
+    """Return an equivalent chain with nested chains flattened."""
+
+    while any(isinstance(b, _AbstractChain) for b in bijections):
+        merged = []
+
+        for bijection in bijections:
+            if isinstance(bijection, _AbstractChain):
+                merged.extend(bijection.bijections)
+            else:
+                merged.append(bijection)
+
+        bijections = tuple(merged)
+
+    return chain(bijections)
+    
+def chain(
+    bijections: Sequence[AbstractBijection],
+) -> (
+    DeterministicChain
+    | StochasticChain
+    | StatefulChain
+    | StochasticStatefulChain
+):
+    bijections = tuple(merge_chains(bijections))
+
+    check_shapes_match([b.shape for b in bijections])
+
+    shape = bijections[0].shape
+    cond_shape = merge_cond_shapes([b.cond_shape for b in bijections])
+
+    match (
+        any(b.stochastic for b in bijections),
+        any(b.stateful for b in bijections),
+    ):
+        case False, False:
+            return DeterministicChain(
+                shape=shape,
+                cond_shape=cond_shape,
+                bijections=bijections,
+            )
+
+        case True, False:
+            return StochasticChain(
+                shape=shape,
+                cond_shape=cond_shape,
+                bijections=bijections,
+            )
+
+        case False, True:
+            return StatefulChain(
+                shape=shape,
+                cond_shape=cond_shape,
+                bijections=bijections,
+            )
+
+        case True, True:
+            return StochasticStatefulChain(
+                shape=shape,
+                cond_shape=cond_shape,
+                bijections=bijections,
+            )
+
+        case _:
+            raise TypeError()

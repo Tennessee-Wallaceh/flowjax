@@ -10,7 +10,7 @@ from jax.scipy.linalg import solve_triangular
 from jaxtyping import Array, ArrayLike, Shaped, PRNGKeyArray
 import equinox as eqx
 
-from flowjax.bijections.bijection import AbstractBijection
+from flowjax.bijections.bijection import AbstractDeterministicBijection
 from flowjax.parameters import PositiveParameter, TriangularParameter
 from flowjax.utils import arraylike_to_array
 
@@ -18,7 +18,7 @@ from flowjax.utils import arraylike_to_array
 
 
 
-class Affine(AbstractBijection):
+class Affine(AbstractDeterministicBijection):
     r"""Elementwise affine transformation :math:`y = a \cdot x + b`.
 
     ``loc`` and ``scale`` should broadcast to the desired shape of the bijection.
@@ -56,7 +56,7 @@ class Affine(AbstractBijection):
         return (y - self.loc) / scale, -jnp.log(jnp.abs(scale)).sum()
 
 
-class Loc(AbstractBijection):
+class Loc(AbstractDeterministicBijection):
     r"""Location transformation :math:`y = a \cdot x + b`.
 
     Args:
@@ -78,7 +78,7 @@ class Loc(AbstractBijection):
         return y - self.loc, jnp.zeros(())
 
 
-class Scale(AbstractBijection):
+class Scale(AbstractDeterministicBijection):
     r"""Scale transformation :math:`y = a \cdot x`.
 
     Args:
@@ -106,7 +106,7 @@ class Scale(AbstractBijection):
         return y / scale, -jnp.log(jnp.abs(scale)).sum()
 
 
-class TriangularAffine(AbstractBijection):
+class TriangularAffine(AbstractDeterministicBijection):
     r"""A triangular affine transformation.
 
     Transformation has the form :math:`Ax + b`, where :math:`A` is a lower or upper
@@ -156,7 +156,7 @@ class TriangularAffine(AbstractBijection):
         return x, -jnp.log(jnp.abs(jnp.diag(triangular))).sum()
 
 
-class AdditiveCondition(AbstractBijection):
+class AdditiveCondition(AbstractDeterministicBijection):
     """Given a callable ``f``, carries out the transformation ``y = x + f(condition)``.
 
     If used to transform a distribution, this allows the "location" to be changed as a
@@ -207,7 +207,7 @@ class AdditiveCondition(AbstractBijection):
         return y - self.module(condition), jnp.zeros(())
 
 
-class LULinear(AbstractBijection):
+class LULinear(AbstractDeterministicBijection):
     shape: tuple[int, ...]
     cond_shape = None
 
@@ -318,7 +318,7 @@ class LULinear(AbstractBijection):
         return x, log_det
 
 
-class UnitLULinear(AbstractBijection):
+class UnitLULinear(AbstractDeterministicBijection):
     shape: tuple[int, ...]
     cond_shape = None
 

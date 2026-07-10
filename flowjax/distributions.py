@@ -8,9 +8,10 @@ from math import prod
 from typing import ClassVar
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import jax.random as jr
-from equinox import AbstractVar
+from equinox import AbstractVar, AbstractClassVar
 from jax import dtypes
 from jax.numpy import linalg
 from jax.scipy import stats as jstats
@@ -29,207 +30,332 @@ from flowjax.bijections import (
 )
 from flowjax.parameters import LogSimplexParameter, PositiveParameter
 from flowjax.utils import (
-    _get_ufunc_signature,
     arraylike_to_array,
     merge_cond_shapes,
 )
 
-
 class AbstractDistribution(eqx.Module):
     """Abstract distribution class.
 
-    Distributions are registered as JAX PyTrees (as they are equinox modules), and as
-    such they are compatible with normal JAX operations.
+    Distributions are registered as JAX PyTrees (as they are Equinox modules), and as
+    such are compatible with normal JAX operations.
+
+    Methods act on a single sample and, for conditional distributions, a single
+    conditioning variable. Use ``jax.vmap`` or ``eqx.filter_vmap`` to explicitly
+    vectorise operations over additional batch dimensions.
 
     Concrete subclasses can be implemented as follows:
 
-    - Inherit from :class:`AbstractDistribution`.
+    - Inherit from ``AbstractDistribution``.
     - Define the abstract attributes ``shape`` and ``cond_shape``.
       ``cond_shape`` should be ``None`` for unconditional distributions.
-    - Define the abstract method ``_sample`` which returns a single sample
-      with shape ``dist.shape``, (given a single conditioning variable, if needed).
-    - Define the abstract method ``_log_prob``, returning a scalar log probability
-      of a single sample, (given a single conditioning variable, if needed).
+    - Implement ``_sample``, which returns a single sample with shape ``shape``.
+    - Implement ``_log_prob``, which returns the scalar log probability of a
+      single sample.
 
-    The abstract class then defines vectorized versions with shape checking for the
-    public API. See the source code for :class:`StandardNormal` for a simple concrete
-    example.
+    Stateful distributions may additionally override ``_sample_with_state`` and
+    ``_sample_and_log_prob_with_state``.
 
     Attributes:
-        shape: Tuple denoting the shape of a single sample from the distribution.
-        cond_shape: Tuple denoting the shape of an instance of the conditioning
-            variable. This should be None for unconditional distributions.
-
+        shape: Shape of a single sample from the distribution.
+        cond_shape: Shape of a single conditioning variable, or ``None`` for
+            unconditional distributions.
     """
 
     shape: AbstractVar[tuple[int, ...]]
     cond_shape: AbstractVar[tuple[int, ...] | None]
 
     @abstractmethod
-    def _log_prob(self, x: Array, condition: Array | None = None) -> Array:
-        """Evaluate the log probability of point x.
+    def _log_prob(
+        self,
+        x: Array,
+        condition: Array | None = None,
+    ) -> Array:
+        """Evaluate the log probability of a single sample."""
 
-        This method should be be valid for inputs with shapes matching
-        ``distribution.shape`` and ``distribution.cond_shape`` for conditional
-        distributions (i.e. it defines the method for unbatched inputs).
+    def _log_prob_with_state(
+        self,
+        x: Array,
+        condition: Array | None = None,
+        *,
+        key: PRNGKeyArray | None = None,
+        state: eqx.nn.State | None = None,
+        inference: bool = True,
+    ) -> tuple[Array, eqx.nn.State | None]:
+        """Evaluate log probability with optional key/state support.
+
+        Stateless distributions should not need to override this.
         """
+        del key, inference
+        return self._log_prob(x, condition), state
 
     @abstractmethod
-    def _sample(self, key: PRNGKeyArray, condition: Array | None = None) -> Array:
-        """Sample a point from the distribution.
+    def _sample(
+        self,
+        key: PRNGKeyArray,
+        condition: Array | None = None,
+    ) -> Array:
+        """Draw a single sample from the distribution."""
 
-        This method should return a single sample with shape matching
-        ``distribution.shape``.
+    def _sample_with_state(
+        self,
+        key: PRNGKeyArray,
+        condition: Array | None = None,
+        *,
+        state: eqx.nn.State | None = None,
+        inference: bool = True,
+    ) -> tuple[Array, eqx.nn.State | None]:
+        """Draw a single sample with optional state support.
+
+        Stateless distributions should not need to override this.
         """
+        del inference
+        return self._sample(key, condition), state
 
-    def _sample_and_log_prob(self, key: PRNGKeyArray, condition: Array | None = None):
-        """Sample a point from the distribution, and return its log probability."""
+    def _sample_and_log_prob(
+        self,
+        key: PRNGKeyArray,
+        condition: Array | None = None,
+    ) -> tuple[Array, Array]:
+        """Draw a single sample and return its log probability."""
         x = self._sample(key, condition)
         return x, self._log_prob(x, condition)
 
-    def log_prob(self, x: ArrayLike, condition: ArrayLike | None = None) -> Array:
-        """Evaluate the log probability.
+    def _sample_and_log_prob_with_state(
+        self,
+        key: PRNGKeyArray,
+        condition: Array | None = None,
+        *,
+        state: eqx.nn.State | None = None,
+        inference: bool = True,
+    ) -> tuple[tuple[Array, Array], eqx.nn.State | None]:
+        """Draw a sample and return its log probability with state support."""
+        sample_key, log_prob_key = jr.split(key)
 
-        Uses numpy-like broadcasting if additional leading dimensions are passed.
+        x, state = self._sample_with_state(
+            sample_key,
+            condition,
+            state=state,
+            inference=inference,
+        )
+        log_prob, state = self._log_prob_with_state(
+            x,
+            condition,
+            key=log_prob_key,
+            state=state,
+            inference=inference,
+        )
+
+        return (x, log_prob), state
+
+    def log_prob(
+        self,
+        x: ArrayLike,
+        condition: ArrayLike | None = None,
+    ) -> Array:
+        """Evaluate the log probability of a single sample.
 
         Args:
-            x: Points at which to evaluate density.
-            condition: Conditioning variables. Defaults to None.
+            x: Sample with shape matching ``distribution.shape``.
+            condition: Conditioning variable with shape matching
+                ``distribution.cond_shape``. Required for conditional distributions.
 
         Returns:
-            Array: Jax array of log probabilities.
+            Scalar log probability.
         """
         x = arraylike_to_array(x, err_name="x", dtype=float)
-        if self.cond_shape is not None:
-            condition = arraylike_to_array(condition, err_name="condition", dtype=float)
-        return self._vectorize(self._log_prob)(x, condition)
+        self._check_shape("x", x, self.shape)
+
+        condition = self._process_condition(condition)
+        return self._log_prob(x, condition)
+
+    def log_prob_with_state(
+        self,
+        x: ArrayLike,
+        condition: ArrayLike | None = None,
+        key: PRNGKeyArray | None = None,
+        state: eqx.nn.State | None = None,
+        *,
+        inference: bool = True,
+    ) -> tuple[Array, eqx.nn.State | None]:
+        """Evaluate log probability with optional key/state support."""
+        x = arraylike_to_array(x, err_name="x", dtype=float)
+        self._check_shape("x", x, self.shape)
+
+        condition = self._process_condition(condition)
+
+        return self._log_prob_with_state(
+            x,
+            condition,
+            key=key,
+            state=state,
+            inference=inference,
+        )
 
     def sample(
         self,
         key: PRNGKeyArray,
-        sample_shape: tuple[int, ...] = (),
         condition: ArrayLike | None = None,
     ) -> Array:
-        """Sample from the distribution.
-
-        For unconditional distributions, the output will be of shape
-        ``sample_shape + dist.shape``. For conditional distributions, batch dimensions
-        in the condition is supported, and the output will have shape
-        ``sample_shape + condition_batch_shape + dist.shape``.
+        """Draw a single sample from the distribution.
 
         Args:
-            key: Jax random key.
-            condition: Conditioning variables. Defaults to None.
-            sample_shape: Sample shape. Defaults to ().
+            key: JAX random key.
+            condition: Conditioning variable with shape matching
+                ``distribution.cond_shape``. Required for conditional distributions.
+
+        Returns:
+            Sample with shape matching ``distribution.shape``.
         """
-        if self.cond_shape is not None:
-            condition = arraylike_to_array(condition, err_name="condition")
-        keys = self._get_sample_keys(key, sample_shape, condition)
-        return self._vectorize(self._sample)(keys, condition)
+        self._check_key(key)
+        condition = self._process_condition(condition)
+
+        return self._sample(key, condition)
+
+    def sample_with_state(
+        self,
+        key: PRNGKeyArray,
+        condition: ArrayLike | None = None,
+        *,
+        state: eqx.nn.State | None = None,
+        inference: bool = True,
+    ) -> tuple[Array, eqx.nn.State | None]:
+        """Draw a single sample with optional state support.
+
+        Args:
+            key: JAX random key.
+            condition: Conditioning variable with shape matching
+                ``distribution.cond_shape``. Required for conditional distributions.
+            state: Optional Equinox state.
+            inference: Whether to run in inference/evaluation mode.
+
+        Returns:
+            The sample and updated state.
+        """
+        self._check_key(key)
+        condition = self._process_condition(condition)
+
+        return self._sample_with_state(
+            key,
+            condition,
+            state=state,
+            inference=inference,
+        )
 
     def sample_and_log_prob(
         self,
         key: PRNGKeyArray,
-        sample_shape: tuple[int, ...] = (),
         condition: ArrayLike | None = None,
     ) -> tuple[Array, Array]:
-        """Sample the distribution and return the samples with their log probabilities.
+        """Draw a single sample and return its log probability.
 
-        For transformed distributions (especially flows), this will generally be more
-        efficient than calling the methods seperately. Refer to the
-        :py:meth:`~flowjax.distributions.AbstractDistribution.sample` documentation for
-        more information.
+        For transformed distributions, especially flows, this will generally be more
+        efficient than calling ``sample`` and ``log_prob`` separately.
 
         Args:
-            key: Jax random key.
-            condition: Conditioning variables. Defaults to None.
-            sample_shape: Sample shape. Defaults to ().
+            key: JAX random key.
+            condition: Conditioning variable with shape matching
+                ``distribution.cond_shape``. Required for conditional distributions.
+
+        Returns:
+            The sample and its scalar log probability.
         """
-        if self.cond_shape is not None:
-            condition = arraylike_to_array(condition, err_name="condition")
-        keys = self._get_sample_keys(key, sample_shape, condition)
-        return self._vectorize(self._sample_and_log_prob)(keys, condition)
+        self._check_key(key)
+        condition = self._process_condition(condition)
+
+        return self._sample_and_log_prob(key, condition)
+
+    def sample_and_log_prob_with_state(
+        self,
+        key: PRNGKeyArray,
+        condition: ArrayLike | None = None,
+        *,
+        state: eqx.nn.State | None = None,
+        inference: bool = True,
+    ) -> tuple[tuple[Array, Array], eqx.nn.State | None]:
+        """Draw a single sample and return its log probability with state support.
+
+        Args:
+            key: JAX random key.
+            condition: Conditioning variable with shape matching
+                ``distribution.cond_shape``. Required for conditional distributions.
+            state: Optional Equinox state.
+            inference: Whether to run in inference/evaluation mode.
+
+        Returns:
+            The sample and its scalar log probability, together with updated state.
+        """
+        self._check_key(key)
+        condition = self._process_condition(condition)
+
+        return self._sample_and_log_prob_with_state(
+            key,
+            condition,
+            state=state,
+            inference=inference,
+        )
+
+    def _process_condition(
+        self,
+        condition: ArrayLike | None,
+    ) -> Array | None:
+        if self.cond_shape is None:
+            if condition is not None:
+                raise ValueError(
+                    "Cannot pass condition to an unconditional distribution."
+                )
+            return None
+
+        if condition is None:
+            raise ValueError("Condition required for a conditional distribution.")
+
+        condition = arraylike_to_array(
+            condition,
+            err_name="condition",
+            dtype=float,
+        )
+        self._check_shape("condition", condition, self.cond_shape)
+
+        return condition
+
+    @staticmethod
+    def _check_shape(
+        name: str,
+        array: Array,
+        expected_shape: tuple[int, ...],
+    ) -> None:
+        if array.shape != expected_shape:
+            raise ValueError(
+                f"Expected {name} to have shape {expected_shape}; got {array.shape}."
+            )
+
+    @staticmethod
+    def _check_key(key: PRNGKeyArray) -> None:
+        if not dtypes.issubdtype(key.dtype, dtypes.prng_key):
+            raise TypeError("New-style typed JAX PRNG keys required.")
 
     @property
     def ndim(self) -> int:
-        """Number of dimensions in the distribution (the length of the shape)."""
+        """Number of dimensions in the distribution; the length of ``shape``."""
         return len(self.shape)
 
     @property
     def cond_ndim(self) -> None | int:
-        """Number of dimensions of the conditioning variable (length of cond_shape)."""
+        """Number of dimensions of the conditioning variable."""
         return None if self.cond_shape is None else len(self.cond_shape)
-
-    def _vectorize(self, method: Callable) -> Callable:
-        """Returns a vectorized version of the distribution method."""
-        # Get shapes without broadcasting - note the () corresponds to key arrays.
-        maybe_cond = [] if self.cond_shape is None else [self.cond_shape]
-        in_shapes = {
-            "_sample_and_log_prob": [()] + maybe_cond,
-            "_sample": [()] + maybe_cond,
-            "_log_prob": [self.shape] + maybe_cond,
-        }
-        out_shapes = {
-            "_sample_and_log_prob": [self.shape, ()],
-            "_sample": [self.shape],
-            "_log_prob": [()],
-        }
-        in_shapes, out_shapes = in_shapes[method.__name__], out_shapes[method.__name__]
-
-        def _check_shapes(method):
-            # Wraps unvectorised method with shape checking
-            @wraps(method)
-            def _wrapper(*args, **kwargs):
-                bound = inspect.signature(method).bind(*args, **kwargs)
-                for in_shape, (name, arg) in zip(
-                    in_shapes,
-                    bound.arguments.items(),
-                    strict=False,
-                ):
-                    if arg.shape != in_shape:
-                        raise ValueError(
-                            f"Expected trailing dimensions matching {in_shape} for "
-                            f"{name}; got {arg.shape}.",
-                        )
-                return method(*args, **kwargs)
-
-            return _wrapper
-
-        signature = _get_ufunc_signature(in_shapes, out_shapes)
-        ex = frozenset([1]) if self.cond_shape is None else frozenset()
-        return jnp.vectorize(_check_shapes(method), signature=signature, excluded=ex)
-
-    def _get_sample_keys(
-        self,
-        key: PRNGKeyArray,
-        sample_shape: tuple[int, ...],
-        condition,
-    ):
-        if not dtypes.issubdtype(key.dtype, dtypes.prng_key):
-            raise TypeError("New-style typed JAX PRNG keys required.")
-
-        if self.cond_ndim is not None:
-            leading_cond_shape = condition.shape[: -self.cond_ndim or None]
-        else:
-            leading_cond_shape = ()
-        key_shape = sample_shape + leading_cond_shape
-        key_size = prod(key_shape)  # note: prod(()) == 1, so works for scalar smaples
-        return jr.split(key, key_size).reshape(key_shape)
 
 
 class AbstractTransformed(AbstractDistribution):
-    """Abstract class respresenting transformed distributions.
+    """Abstract class representing transformed distributions.
 
-    We take the forward bijection for use in sampling, and the inverse for use in
-    density evaluation. See also :class:`Transformed`. Concete implementations should
-    subclass :class:`AbstractTransformed`, and define the abstract attributes
-    ``base_dist`` and ``bijection``. See the source code for :class:`Normal` as a
-    simple example.
+    The forward bijection is used for sampling and the inverse bijection for density
+    evaluation. Concrete implementations should subclass ``AbstractTransformed`` and
+    define the abstract attributes ``base_dist`` and ``bijection``.
 
     .. warning::
-            It is the users responsibility to ensure the bijection is valid across the
-            entire support of the distribution. Failure to do so may result in
-            non-finite values or incorrectly normalized densities.
+        It is the user's responsibility to ensure the bijection is valid across the
+        entire support of the distribution. Failure to do so may result in non-finite
+        values or an incorrectly normalized density.
 
     Attributes:
         base_dist: The base distribution.
@@ -240,7 +366,7 @@ class AbstractTransformed(AbstractDistribution):
     bijection: AbstractVar[AbstractBijection]
 
     def __check_init__(self):
-        """Check for compatible shapes between base_dist and bijection."""
+        """Check for compatible shapes between base distribution and bijection."""
         if (
             self.base_dist.cond_shape is not None
             and self.bijection.cond_shape is not None
@@ -248,56 +374,161 @@ class AbstractTransformed(AbstractDistribution):
         ):
             raise ValueError(
                 "The base distribution and bijection are both conditional "
-                "but have mismatched cond_shape attributes. Base distribution has"
-                f"{self.base_dist.cond_shape}, and the bijection has"
-                f"{self.bijection.cond_shape}.",
+                "but have mismatched cond_shape attributes. Base distribution has "
+                f"{self.base_dist.cond_shape}, and the bijection has "
+                f"{self.bijection.cond_shape}."
             )
 
         if self.base_dist.shape != self.bijection.shape:
             raise ValueError(
                 "The base distribution and bijection have mismatched shapes. "
                 f"Base distribution has {self.base_dist.shape}, and the bijection "
-                f"has {self.bijection.shape}.",
+                f"has {self.bijection.shape}."
             )
 
-    def _log_prob(self, x, condition=None):
+    def _log_prob(
+        self,
+        x: Array,
+        condition: Array | None = None,
+    ) -> Array:
         z, log_abs_det = self.bijection.inverse_and_log_det(x, condition)
-        p_z = self.base_dist._log_prob(z, condition)
-        log_prob = p_z + log_abs_det
-        # If log_prob is nan, we assume outside transform support
+        log_prob = self.base_dist._log_prob(z, condition) + log_abs_det
+
+        # If log_prob is nan, assume x lies outside the transform support.
         return jnp.where(jnp.isnan(log_prob), -jnp.inf, log_prob)
 
-    def _sample(self, key, condition=None):
+    def _log_prob_with_state(
+        self,
+        x: Array,
+        condition: Array | None = None,
+        *,
+        key: PRNGKeyArray | None = None,
+        state: eqx.nn.State | None = None,
+        inference: bool = True,
+    ) -> tuple[Array, eqx.nn.State | None]:
+        if key is None:
+            bijection_key = None
+            base_key = None
+        else:
+            bijection_key, base_key = jr.split(key)
+
+        (z, log_abs_det), state = self.bijection.inverse_and_log_det_with_state(
+            x,
+            condition,
+            key=bijection_key,
+            state=state,
+            inference=inference,
+        )
+        base_log_prob, state = self.base_dist._log_prob_with_state(
+            z,
+            condition,
+            key=base_key,
+            state=state,
+            inference=inference,
+        )
+
+        log_prob = base_log_prob + log_abs_det
+
+        # If log_prob is nan, assume x lies outside the transform support.
+        return jnp.where(jnp.isnan(log_prob), -jnp.inf, log_prob), state
+
+    def _sample(
+        self,
+        key: PRNGKeyArray,
+        condition: Array | None = None,
+    ) -> Array:
         base_sample = self.base_dist._sample(key, condition)
         return self.bijection.transform(base_sample, condition)
+
+    def _sample_with_state(
+        self,
+        key: PRNGKeyArray,
+        condition: Array | None = None,
+        *,
+        state: eqx.nn.State | None = None,
+        inference: bool = True,
+    ) -> tuple[Array, eqx.nn.State | None]:
+        base_key, bijection_key = jr.split(key)
+
+        base_sample, state = self.base_dist._sample_with_state(
+            base_key,
+            condition,
+            state=state,
+            inference=inference,
+        )
+        sample, state = self.bijection.transform_with_state(
+            base_sample,
+            condition,
+            key=bijection_key,
+            state=state,
+            inference=inference,
+        )
+        return sample, state
 
     def _sample_and_log_prob(
         self,
         key: PRNGKeyArray,
         condition: Array | None = None,
-    ):  # TODO add overide decorator when python>=3.12 is common
-        # We override to avoid computing the inverse transformation.
-        base_sample, log_prob_base = self.base_dist._sample_and_log_prob(key, condition)
-        sample, forward_log_dets = self.bijection.transform_and_log_det(
+    ) -> tuple[Array, Array]:
+        # Override to avoid computing the inverse transformation.
+        base_sample, base_log_prob = self.base_dist._sample_and_log_prob(
+            key,
+            condition,
+        )
+        sample, forward_log_det = self.bijection.transform_and_log_det(
             base_sample,
             condition,
         )
-        return sample, log_prob_base - forward_log_dets
+        return sample, base_log_prob - forward_log_det
+
+    def _sample_and_log_prob_with_state(
+        self,
+        key: PRNGKeyArray,
+        condition: Array | None = None,
+        *,
+        state: eqx.nn.State | None = None,
+        inference: bool = True,
+    ) -> tuple[tuple[Array, Array], eqx.nn.State | None]:
+        base_key, bijection_key = jr.split(key)
+
+        (base_sample, base_log_prob), state = (
+            self.base_dist._sample_and_log_prob_with_state(
+                base_key,
+                condition,
+                state=state,
+                inference=inference,
+            )
+        )
+
+        (sample, forward_log_det), state = (
+            self.bijection.transform_and_log_det_with_state(
+                base_sample,
+                condition,
+                key=bijection_key,
+                state=state,
+                inference=inference,
+            )
+        )
+
+        return (sample, base_log_prob - forward_log_det), state
 
     def merge_transforms(self):
-        """Unnests nested transformed distributions.
+        """Unnest nested transformed distributions.
 
-        Returns an equivilent distribution, but ravelling nested
-        :class:`AbstractTransformed` distributions such that the returned distribution
-        has a base distribution that is not an :class:`AbstractTransformed` instance.
+        Returns an equivalent distribution with nested transformed distributions
+        unravelled, such that the returned base distribution is not itself an
+        ``AbstractTransformed`` instance.
         """
         if not isinstance(self.base_dist, AbstractTransformed):
             return self
+
         base_dist = self.base_dist
         bijections = [self.bijection]
+
         while isinstance(base_dist, AbstractTransformed):
             bijections.append(base_dist.bijection)
             base_dist = base_dist.base_dist
+
         bijection = Chain(list(reversed(bijections))).merge_chains()
         return Transformed(base_dist, bijection)
 
@@ -307,9 +538,11 @@ class AbstractTransformed(AbstractDistribution):
 
     @property
     def cond_shape(self) -> tuple[int, ...] | None:
-        return merge_cond_shapes((self.bijection.cond_shape, self.base_dist.cond_shape))
+        return merge_cond_shapes(
+            (self.bijection.cond_shape, self.base_dist.cond_shape)
+        )
 
-
+    
 class Transformed(AbstractTransformed):
     """Form a distribution like object using a base distribution and a bijection.
 
@@ -575,7 +808,7 @@ class _StandardStudentT(AbstractDistribution):
         df = arraylike_to_array(df, dtype=float)
         df = eqx.error_if(df, df <= 0, "Degrees of freedom values must be positive.")
         self.shape = jnp.shape(df)
-        self.df = PositiveParameter(df)
+        self.df = PositiveParameter(df, min_value=0.5)
 
     def _log_prob(self, x, condition=None):
         return jstats.t.logpdf(x, df=self.df.value).sum()
